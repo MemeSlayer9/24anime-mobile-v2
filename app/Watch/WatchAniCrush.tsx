@@ -24,7 +24,7 @@ import axios from "axios";
 import { useKeepAwake } from "expo-keep-awake";
 
 import { useRoute, RouteProp } from "@react-navigation/native";
-import { Anime, RootStackParamList, Episode, BackupResponse } from "../Types/types";
+import { Anime, RootStackParamList, Episode, BackupResponse, AnicrushEpisode } from "../Types/types";
 import { useAnimeId } from "../context/EpisodeContext"; // adjust path as needed
 import AsyncStorage from '@react-native-async-storage/async-storage'; // Make sure AsyncStorage is installed
 import { useEpisode } from "../context/EpisodeHistoryProvider";  // adjust path as needed :contentReference[oaicite:0]{index=0}&#8203;:contentReference[oaicite:1]{index=1}
@@ -53,6 +53,8 @@ interface Segment {
   start: number;
   end: number;
 }
+
+
 
   
 
@@ -89,9 +91,11 @@ const WatchZoro = () => {
   const [item4, setItem4] = useState<BackupResponse | null>(null);
   const [backupImageUrl, setBackupImageUrl] = useState<string>("");
     const [animeTitle, setAnimetitle] = useState<string>("");
+  const [anicrushEpisodes, setAnicrushEpisodes] = useState<Episode[]>([]);
 
 const [isDubMode, setIsDubMode] = useState(false);
 const { episodes2, addEpisode, updateEpisode } = useEpisode();
+const [dub, setDub] = useState<boolean | string | null>(null);
 
   const [selectedSubtitle, setSelectedSubtitle] = useState("disabled");
   const [subtitlesPickerVisible, setSubtitlesPickerVisible] = useState(false);
@@ -225,32 +229,88 @@ const handleDubClick = () => {
   fetchVideoWithDubSetting(true);
 };
 
+useEffect(() => {
+  const fetchProvider = async () => {
+    try {
+      const response = await axios.get(
+        `https://api.amvstr.me/api/v2/info/${animeId}`
+      );
+
+      if (response.data?.dub !== undefined) {
+        setDub(response.data.dub);
+      }
+    } catch (error) {
+      console.error("Backup API also failed", error);
+    }
+  };
+
+  if (animeId) {
+    fetchProvider();
+  }
+}, [animeId]);
+
 const fetchVideoWithDubSetting = async (isDub: boolean): Promise<void> => {
   try {
-    const url = `https://kangaroo-kappa.vercel.app/anime/zoro/watch/${episodeid}?dub=${isDub ? 'true' : 'false'}`;
+    // Changed URL parameter from dub=true/false to subOrDub=dub/sub
+    const url = `https://anicrush-api-eight.vercel.app/api/anime/hls/${episodeid}&subOrDub=${isDub ? 'dub' : 'sub'}`;
+    const proxyUrl = "https://hls.ciphertv.dev/proxy/";
+    console.log(url);
     
     const response = await axios.get(url);
     const json = response.data;
-    if (json.sources && json.sources.length > 0) {
-      const sourceUrl = json.sources[0].url;
+    
+    // Check if result and sources exist in the response
+    if (json.result && json.result.sources && json.result.sources.length > 0) {
+      // Add the proxy URL to the source URL
+      const sourceUrl = `${proxyUrl}${json.result.sources[0].file}`;
       setInitialVideoSource(sourceUrl);
       setVideoSource(sourceUrl);
       setSelectedQuality(sourceUrl);
     }
-    if (json.subtitles) {
-      setSubtitles(json.subtitles);
-      const englishSubtitle = (json.subtitles as Subtitle[]).find((sub) =>
-        sub.lang.toLowerCase().includes("en") || sub.lang.toLowerCase().includes("english")
+    
+    // Define types for track objects
+    interface Track {
+      kind: string;
+      file: string;
+      label: string;
+    }
+    
+    // Updated to handle "tracks" instead of "subtitles"
+    if (json.result && json.result.tracks) {
+      // Convert tracks to the Subtitle format expected by your app
+      const subtitles = json.result.tracks
+        .filter((track: Track) => track.kind === "captions")
+        .map((track: Track) => ({
+          url: track.file,
+          lang: track.label
+        }));
+      
+      setSubtitles(subtitles);
+      
+      // Define subtitle interface
+      interface Subtitle {
+        url: string;
+        lang: string;
+      }
+      
+      // Find English subtitle
+      const englishSubtitle = subtitles.find((sub: Subtitle) => 
+        sub.lang.toLowerCase().includes("english") || 
+        sub.lang.toLowerCase().includes("eng")
       );
+      
       if (englishSubtitle) {
         setSelectedSubtitle(englishSubtitle.lang);
       }
     }
-    if (json.intro) {
-      setIntroSegment(json.intro);
+    
+    // Updated to handle intro/outro from the result object
+    if (json.result && json.result.intro) {
+      setIntroSegment(json.result.intro);
     }
-    if (json.outro) {
-      setOutroSegment(json.outro);
+    
+    if (json.result && json.result.outro) {
+      setOutroSegment(json.result.outro);
     }
   } catch (error) {
     console.error("Error fetching video data: ", error);
@@ -270,18 +330,20 @@ useEffect(() => {
     const fetchEpisode = async () => {
       setLoading(true);
       try {
-        const response = await axios.get(`https://kangaroo-kappa.vercel.app/anime/zoro/info?id=${animeId}`);
-        const data = response.data || null;
-       const posterUrl = response.data?.image;
-       const animetitle = response.data?.title;
-       setAnimetitle(animetitle);
-      setBackupImageUrl(posterUrl);
-         setItem4(data);
-      } catch (error) {
-       } finally {
+        const response = await fetch(`https://anicrush-api-eight.vercel.app/api/mapper/${animeId}`);
+        const data = await response.json();
+        
+        if (data && data.episodes) {
+          setAnicrushEpisodes(data.episodes);
+        }
+        // Removed setError for no episodes
+      } catch (err) {
+        // Removed setError for fetch failure
+      } finally {
         setLoading(false);
       }
     };
+    
     fetchEpisode();
   }, [animeId]);
 
@@ -443,8 +505,7 @@ useEffect(() => {
     setIsFullscreen(!isFullscreen);
   };
   
-  console.log(animeId, 'tawadsadasd');
-
+ 
   const savePlaybackPosition = async (positionMillis: number): Promise<void> => {
   try {
     if (!episodeid) return;
@@ -487,7 +548,7 @@ useEffect(() => {
         created_at: currentTimestamp,
         duration: durSec,
         saved_position: savedSec,
-        provider: "Zoro",
+        provider: "Anicrush",
       });
     }
   } catch (error) {
@@ -540,15 +601,15 @@ useEffect(() => {
   return () => clearTimeout(timer);
 }, [episodeid]);
 const handlePreviousEpisode = () => {
-  if (filteredBackupEpisodes.length > 0) {
-    const currentBackupIndex = filteredBackupEpisodes.findIndex(
+  if (filteredAnicrushEpisodes.length > 0) {
+    const currentBackupIndex = filteredAnicrushEpisodes.findIndex(
       (item) => (item.id) === episodeid
     );
     if (currentBackupIndex > 0) {
-      const prevEpisode = filteredBackupEpisodes[currentBackupIndex - 1];
+      const prevEpisode = filteredAnicrushEpisodes[currentBackupIndex - 1];
       setEpisodeLoading(true);
       setEpisodeid((prevEpisode.id));
-      navigation.navigate("Zoro");
+      navigation.navigate("Anicrush");
     }
   }
 };
@@ -563,79 +624,73 @@ const returnToPortraitMode = async () => {
 };
 
 const handleNextEpisode = () => {
-  if (filteredBackupEpisodes.length > 0) {
-    const currentBackupIndex = filteredBackupEpisodes.findIndex(
+  if (filteredAnicrushEpisodes.length > 0) {
+    const currentBackupIndex = filteredAnicrushEpisodes.findIndex(
       (item) => (item.id) === episodeid
     );
-    if (currentBackupIndex < filteredBackupEpisodes.length - 1) {
-      const nextEpisode = filteredBackupEpisodes[currentBackupIndex + 1];
+    if (currentBackupIndex < filteredAnicrushEpisodes.length - 1) {
+      const nextEpisode = filteredAnicrushEpisodes[currentBackupIndex + 1];
       setEpisodeLoading(true);
       setEpisodeid((nextEpisode.id));
-      navigation.navigate("Zoro");
+      navigation.navigate("Anicrush");
     }
   }
 };
-  const filteredBackupEpisodes =
-    item4 && Array.isArray(item4.episodes)
-      ? item4.episodes
-          .filter((episode) => {
-            if (!searchQuery) return true;
-            return episode.number.toString().includes(searchQuery);
-          })
-          .sort((a, b) => Number(a.number) - Number(b.number))
-      : [];
+const filteredAnicrushEpisodes = Array.isArray(anicrushEpisodes) 
+? anicrushEpisodes
+    .filter((episode) => {
+      if (!searchQuery) return true;
+      return episode.number?.toString().includes(searchQuery);
+    })
+    .sort((a, b) => Number(a.number || 0) - Number(b.number || 0))
+: [];
 
-  const currentBackupEpisode = filteredBackupEpisodes.find(
+  const currentBackupEpisode = filteredAnicrushEpisodes.find(
   (item) => (item.id) === episodeid
 );
-const currentBackupIndex = filteredBackupEpisodes.findIndex(
+const currentBackupIndex = filteredAnicrushEpisodes.findIndex(
   (item) => (item.id) === episodeid
 );
 
 
-   const renderBackupEpisodeItem = ({ item }: { item: any }) => {
-    return (
-      <TouchableOpacity
-        style={styles.episodeContainer}
-        onPress={() => {
-          setEpisodeLoading(true);
-          const formattedEpisodeId = item.id;
-          
-          setEpisodeid(formattedEpisodeId);
-          navigation.navigate("Zoro");
-        }}
-      >
-         <Image
-                source={{
-                  uri: backupImageUrl || "https://via.placeholder.com/150",
-                }}
-                style={styles.episodeThumbnail}
-              />
-        <View style={styles.episodeTextContainer}>
-          <Text style={styles.episodeTitle}>Episode {item.number}</Text>
-          <Text style={styles.episodeTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          
-          <View style={styles.badgeContainer}>
-            {item.isSubbed === true && (
-              <View style={[styles.badge, styles.subbedBadge]}>
-                <Text style={styles.badgeText}>SUB</Text>
-              </View>
-            )}
-            {item.isDubbed === true && (
-              <View style={[styles.badge, styles.dubbedBadge]}>
-                <Text style={styles.badgeText}>DUB</Text>
-              </View>
-            )}
-          </View>
-          
-          {item.isFiller && <Text style={styles.episodeMeta}>Filler</Text>}
-        </View>
-      </TouchableOpacity>
-    );
-  };
+  const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
+    <TouchableOpacity 
+    style={styles.episodeContainer}
+    onPress={() => {
+      // Convert item.id to string if it exists
+      if (item.id !== undefined && item.id !== null) {
+        setEpisodeid(String(item.id)); // Convert to string to ensure compatibility
+      }
+      
+      // Use the animeId prop that's passed to this component
+      if (animeId !== undefined && animeId !== null) {
+        setAnimeId(String(animeId)); // Convert to string to ensure it matches expected type
+      }
+      
+      // Make sure "Anicrush" is in your RootStackParamList
+      navigation.navigate("Anicrush" as any); // Remove 'as any' after updating types
+    }}
+  >
+    {item.image ? (
+      <Image
+        source={{ uri: item.image }}
+        style={styles.episodeThumbnail}
+        resizeMode="cover"
+      />
+    ) : null}
+    
+    <View style={styles.episodeTextContainer}>
+      <Text style={styles.episodeTitle} numberOfLines={1}>
+        {item.name_english} {item.name ? `(${item.name})` : ''}
+      </Text>
+      <Text style={styles.episodeTitle}>Episode {item.number}</Text>
 
+      <Text style={styles.episodeMeta}>
+        Aired: {item.airDate} • {item.runtime} min
+      </Text>
+    </View>
+  </TouchableOpacity>
+);
     if (episodeLoading) {
     return (
       <View style={styles.loadingContainer2}>
@@ -794,10 +849,10 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
                       </TouchableOpacity>
                     <TouchableOpacity
       onPress={handleNextEpisode}
-      disabled={currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1}
+      disabled={currentBackupEpisode && currentBackupIndex >= filteredAnicrushEpisodes.length - 1}
       style={[
         styles.navButton,
-        (currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1) && styles.disabledButton,
+        (currentBackupEpisode && currentBackupIndex >= filteredAnicrushEpisodes.length - 1) && styles.disabledButton,
       ]}
     >
       <Ionicons name="chevron-forward" size={30} color="white" />
@@ -855,8 +910,7 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
       </Pressable>
 
       {/* Quality Picker Modal */}
-    // In the Modal quality picker, modify the quality selection code
-<Modal visible={pickerVisible} transparent animationType="slide">
+ <Modal visible={pickerVisible} transparent animationType="slide">
   <View style={styles.modalBackdrop}>
     <View style={styles.modalContent}>
       <Text style={styles.modalTitle}>Select Quality</Text>
@@ -966,10 +1020,10 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
     </Text>
     <TouchableOpacity
       onPress={handleNextEpisode}
-      disabled={currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1}
+      disabled={currentBackupEpisode && currentBackupIndex >= filteredAnicrushEpisodes.length - 1}
       style={[
         styles.navButton,
-        (currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1) && styles.disabledButton,
+        (currentBackupEpisode && currentBackupIndex >= filteredAnicrushEpisodes.length - 1) && styles.disabledButton,
       ]}
     >
       <Ionicons name="chevron-forward" size={30} color="white" />
@@ -979,34 +1033,31 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
   <View style={styles.nextEpisodesHeader}>
   <Text style={styles.nextEpisodesText}>Episodes</Text>
   
-  {item4 && item4.episodes && (
-  <View style={styles.badgeContainer}>
-    {item4.episodes.find(ep => ep.id === episodeid)?.isSubbed === true && (
-      <TouchableOpacity 
+<View style={styles.badgeContainer}>
+  {/* Always show SUB button */}
+<TouchableOpacity 
         style={[
           styles.badge, 
           styles.subbedBadge,
           !isDubMode && styles.activeBadge  // Apply active style when NOT in dub mode
         ]}
         onPress={handleSubClick}
-      >          
-        <Text style={styles.badgeText}>SUB</Text>
-      </TouchableOpacity>
-    )}
-    {item4.episodes.find(ep => ep.id === episodeid)?.isDubbed === true && (
-      <TouchableOpacity 
+      >          <Text style={styles.badgeText}>SUB</Text>
+  </TouchableOpacity>
+  
+  {/* Show DUB button only when dub is true */}
+  {dub === true && (
+ <TouchableOpacity 
         style={[
           styles.badge, 
           styles.dubbedBadge,
           isDubMode && styles.activeBadge  // Apply active style when IN dub mode
         ]}
         onPress={handleDubClick}
-      >
-        <Text style={styles.badgeText}>DUB</Text>
-      </TouchableOpacity>
-    )}
-  </View>
-)}
+      >      <Text style={styles.badgeText}>DUB</Text>
+    </TouchableOpacity>
+  )}
+</View>
   
   <TextInput
     style={styles.searchInput}
@@ -1018,9 +1069,9 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
   />
 </View>
           <FlatList
-            data={filteredBackupEpisodes}
-            renderItem={renderBackupEpisodeItem}
-            keyExtractor={(item) => item.episodeId || item.id}
+            data={filteredAnicrushEpisodes}
+            renderItem={renderAnicrushEpisodeItem}
+            keyExtractor={(item) => item.id?.toString() || `episode-${item.number}`}
             contentContainerStyle={styles.episodesList}
           />
         </>

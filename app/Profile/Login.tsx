@@ -13,6 +13,7 @@ type RootStackParamList = {
   Login: undefined;
   Register: undefined;
   Profile: undefined;
+  Tabs: undefined;
 };
 
 type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Login'>;
@@ -32,7 +33,7 @@ const LoginScreen = () => {
       if (storedEmail) {
         navigation.reset({
           index: 0,
-          routes: [{ name: 'TabNavigator' }],
+          routes: [{ name: 'Tabs' }],
         });
       }
     };
@@ -94,7 +95,7 @@ const LoginScreen = () => {
       // Reset navigation stack and navigate to TabNavigator
       navigation.reset({
         index: 0,
-        routes: [{ name: 'TabNavigator' }],
+        routes: [{ name: 'Tabs' }],
       });
     } catch (error) {
       const errorMessage =

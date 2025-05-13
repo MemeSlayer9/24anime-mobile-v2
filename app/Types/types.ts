@@ -158,8 +158,19 @@ export type RootStackParamList = {
 Animemaster: undefined;
     Animekai: undefined; // add this
   Flix: undefined; // Add this line
+  Anicrush: undefined
 
 };
+
+export interface AnicrushEpisode {
+  id?: string | number;
+  number?: number | string;
+  name?: string;
+  name_english?: string;
+  image?: string;
+  airDate?: string;
+  runtime?: string | number;
+}
 
 
 export type Episode = {

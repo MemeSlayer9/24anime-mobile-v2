@@ -22,10 +22,13 @@ import {
   Anime3,
   Anime3Episode,
   BackupResponse,
+  AnicrushEpisode,
 } from "../Types/types";
 import { useAnimeId } from "../context/EpisodeContext";
 import { slugMapping } from "../mapping/slugMapping"; // adjust the relative path as needed
 import { zoroSlug } from "../mapping/zoroSlugMapping";
+import { useBookMarkId  } from "../context/BookmarkContent";
+import { Ionicons } from '@expo/vector-icons';
 
 // Define the route type for this screen
 type DetailsScreenRouteProp = RouteProp<RootStackParamList, "Details">;
@@ -34,6 +37,7 @@ const Details = () => {
   const route = useRoute<DetailsScreenRouteProp>();
   const { id } = route.params;
   const { setAnimeId, setEpisodeid } = useAnimeId();
+   const { setbookMarkId } = useBookMarkId ();
 
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const [provider, setProvider] = useState("zoro");
@@ -43,6 +47,8 @@ const Details = () => {
     const [backupImageUrl, setBackupImageUrl] = useState<string>("");
   const [HianimeId, setHianimeId] = useState<string>("");
   const [slug, setSlug] = useState<string>("");
+  const [anicrushEpisodes, setAnicrushEpisodes] = useState<Episode[]>([]);
+  const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
 
   const [anime, setAnime] = useState<Anime | null>(null);
   const [anime2, setAnime2] = useState<Anime2 | null>(null);
@@ -154,10 +160,33 @@ const tabs = [
     fetchData();
   }, [id, provider]);
 
+ 
+       const fetchAnicrushData = async () => {
+      try {
+        const response = await fetch(`https://anicrush-api-eight.vercel.app/api/mapper/${id}`);
+        const data = await response.json();
+        
+        if (data && data.episodes) {
+          setAnicrushEpisodes(data.episodes);
+        } else {
+          setError('No episodes found');
+        }
+      } catch (err) {
+        setError('Failed to fetch episodes: ');
+      } finally {
+        setLoading(false);
+      }
+    };
+      useEffect(() => {
+    if (provider === "anicrush" && id) {
+   fetchAnicrushData();
+    }
+  }, [id, provider]);
+
 const fetchBackupImage = async () => {
   try {
     // Check if there's a mapping for this zoroId
-    const mappedZoroId = zoroSlug[zoroId] || zoroId;
+    const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
     
     const response = await axios.get(
       `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}`
@@ -174,12 +203,28 @@ const fetchBackupImage = async () => {
   }
 };
 
+const handleAddBookmark = (id?: number): void => {
+  if (id == null) return;       // guard against undefined
+  setbookMarkId(id);
+  setIsBookmarked(true);
+  console.log('Bookmark clicked, selectId:', id);
+};
+  useEffect(() => {
+    if (isBookmarked) {
+      const timer = setTimeout(() => {
+         setIsBookmarked(false); // Hide the message after 2 seconds
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isBookmarked]);
+
 // Similarly, update your fetchEpisode function:
 const fetchEpisode = async () => {
   setLoading(true);
   try {
-    // Check if there's a mapping for this zoroId
-    const mappedZoroId = zoroSlug[zoroId] || zoroId;
+    // First check if there's a direct mapping for the anime ID
+    // If available, use the mapped ID, otherwise fall back to zoroId
+    const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
     
     const response = await axios.get(
       `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}/episodes`
@@ -290,6 +335,15 @@ useEffect(() => {
           .sort((a, b) => Number(a.number) - Number(b.number))
       : [];
 
+        const filteredAnicrushEpisodes = Array.isArray(anicrushEpisodes) 
+    ? anicrushEpisodes
+        .filter((episode) => {
+          if (!searchQuery) return true;
+          return episode.number?.toString().includes(searchQuery);
+        })
+        .sort((a, b) => Number(a.number || 0) - Number(b.number || 0))
+    : [];
+
   const renderEpisodeItem = ({ item }: { item: Episode }) => {
     return (
       <TouchableOpacity
@@ -379,12 +433,53 @@ useEffect(() => {
     );
   };
 
+const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
+  <TouchableOpacity 
+    style={styles.episodeContainer}
+    onPress={() => {
+      // Convert item.id to string if it exists
+      if (item.id !== undefined && item.id !== null) {
+        setEpisodeid(String(item.id)); // Convert to string to ensure compatibility
+      }
+      
+      // Ensure id is a string before setting
+      if (id !== undefined && id !== null) {
+        setAnimeId(String(id)); // Convert to string to ensure it matches expected type
+      }
+      
+      // Make sure "Anicrush" is in your RootStackParamList
+      navigation.navigate("Anicrush" as any); // Remove 'as any' after updating types
+    }}
+  >
+    {item.image ? (
+      <Image
+        source={{ uri: item.image }}
+        style={styles.episodeThumbnail}
+        resizeMode="cover"
+      />
+    ) : null}
+    
+    <View style={styles.episodeTextContainer}>
+      <Text style={styles.episodeTitle} numberOfLines={1}>
+        {item.name_english} {item.name ? `(${item.name})` : ''}
+      </Text>
+      <Text style={styles.episodeTitle}>Episode {item.number}</Text>
+
+      <Text style={styles.episodeMeta}>
+        Aired: {item.airDate} • {item.runtime} min
+      </Text>
+    </View>
+  </TouchableOpacity>
+);
+
   // Define base provider options
   const baseProviders = [
     { label: "Animepahe", value: "animepahe" },
     { label: "Zoro", value: "zoro" },
     { label: "Animekai", value: "animekai" },
     { label: "Animemaster", value: "animemaster" },
+        { label: "Anicrush", value: "anicrush" },
+
   ];
 
   // Conditionally add Animemasterdub if dub is truthy
@@ -455,8 +550,21 @@ useEffect(() => {
 </Text>
 </View>
                  
-
+ 
         </View>
+        <TouchableOpacity
+  onPress={() => {
+    const animeId = anime?.id;
+    if (animeId !== undefined) {
+      // Ensure we're passing a number to the handler
+      handleAddBookmark(typeof animeId === 'string' ? Number(animeId) : animeId);
+    }
+  }}
+  style={styles.bookmarkButton}
+>
+  <Ionicons name="bookmark-outline" size={30} color="#DB202C" />
+</TouchableOpacity>
+
    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
   {tabs.map((tab) => {
     const isActive = activeTab === tab.key;
@@ -602,7 +710,7 @@ useEffect(() => {
         />
       </View>
 
-       {provider === "zoro" && (
+    {provider === "zoro" && (
   <FlatList
     data={filteredBackupEpisodes}
     renderItem={renderBackupEpisodeItem}
@@ -612,8 +720,35 @@ useEffect(() => {
   />
 )}
 
-{/* For providers other than zoro, animemaster, and animemasterdub */}
-{provider !== "zoro" && provider !== "animemaster" && provider !== "animemasterdub" && (
+{/* For Animemaster and Animemasterdub providers */}
+{(provider === "animemaster" || provider === "animemasterdub") &&
+  slugDetails?.episodes &&
+  Array.isArray(slugDetails.episodes) && (
+    <FlatList
+      data={filteredMasterEpisodes}
+      renderItem={renderMasterEpisodes}
+      keyExtractor={(item) => item.episodeId}
+      scrollEnabled={false}
+      contentContainerStyle={styles.episodesList}
+    />
+)}
+
+{/* For Anicrush provider */}
+{provider === "anicrush" && (
+  <FlatList
+    data={filteredAnicrushEpisodes}
+    renderItem={renderAnicrushEpisodeItem}
+    keyExtractor={(item) => item.id?.toString() || `episode-${item.number}`}
+    scrollEnabled={false}
+    contentContainerStyle={styles.episodesList}
+  />
+)}
+
+{/* For other providers (animepahe, animekai) */}
+{provider !== "zoro" && 
+ provider !== "animemaster" && 
+ provider !== "animemasterdub" && 
+ provider !== "anicrush" && (
   filteredEpisodes.length > 0 ? (
     <FlatList
       data={filteredEpisodes}
@@ -634,32 +769,9 @@ useEffect(() => {
     )
   )
 )}
-
-{/* Render master episodes if Animemaster is selected */}
-{provider === "animemaster" &&
-  slugDetails?.episodes &&
-  Array.isArray(slugDetails.episodes) && (
-    <FlatList
-      data={filteredMasterEpisodes}
-      renderItem={renderMasterEpisodes}
-      keyExtractor={(item) => item.episodeId}
-      scrollEnabled={false}
-      contentContainerStyle={styles.episodesList}
-    />
-)}
-
-{/* Render master episodes if Animemasterdub is selected */}
-{provider === "animemasterdub" &&
-  slugDetails?.episodes &&
-  Array.isArray(slugDetails.episodes) && (
-    <FlatList
-      data={filteredMasterEpisodes}
-      renderItem={renderMasterEpisodes}
-      keyExtractor={(item) => item.episodeId}
-      scrollEnabled={false}
-      contentContainerStyle={styles.episodesList}
-    />
-)}
+        
+          
+      
     </ScrollView>
   );
 };
@@ -674,6 +786,11 @@ const styles = StyleSheet.create({
     backgroundColor: "#1E1E1E",
     margin: 10,
     borderRadius: 8,
+  },
+  bookmarkButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
   },
   dropdownLabel: {
     color: "#fff",

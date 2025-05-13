@@ -9,6 +9,7 @@ import {
   RefreshControl,
   Modal,
   Alert,
+  AppState,
 } from 'react-native';
 import { useEpisode, Episode } from '../context/EpisodeHistoryProvider';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -16,22 +17,22 @@ import { RootStackParamList } from '../Types/types';
 import { Feather } from '@expo/vector-icons';
 import { useAnimeId } from "../context/EpisodeContext";
 import { useFocusEffect } from '@react-navigation/native';
-import { supabase } from '../supabase/supabaseClient'; // Make sure to import your Supabase client
+import { supabase } from '../supabase/supabaseClient';
 
 const formatTime = (seconds: number) => {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
 };
+
 type HistoryScreenNavigationProp = StackNavigationProp<RootStackParamList, 'History'>;
 
-// Define the props for the component
 type Props = {
   navigation: HistoryScreenNavigationProp;
 };
 
 const HistoryScreen = ({ navigation }) => {
-  const { episodes2, removeEpisode, clearAll } = useEpisode();
+  const { episodes2, removeEpisode, clearAll, addEpisode } = useEpisode(); // Added addEpisode here
   const { episodeid, animeId, setAnimeId, setEpisodeid } = useAnimeId();
   const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -39,12 +40,31 @@ const HistoryScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [syncedEpisodes, setSyncedEpisodes] = useState<Set<string>>(new Set());
+  const [appState, setAppState] = useState(AppState.currentState);
 
   // Initialize display order with the most recent unique episode entries
   const [displayOrder, setDisplayOrder] = useState<Episode[]>([]);
   
   // Track clicked episodes and their order
   const [clickedOrder, setClickedOrder] = useState<string[]>([]);
+
+  // Handle app state changes (background/foreground)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.match(/inactive|background/) && nextAppState === 'active') {
+        console.log('App has come to the foreground!');
+        // Re-fetch data when app comes to foreground
+        if (userId) {
+          fetchSupabaseHistory();
+        }
+      }
+      setAppState(nextAppState);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [appState, userId]);
 
   // Get current user on component mount
   useEffect(() => {
@@ -72,13 +92,12 @@ const HistoryScreen = ({ navigation }) => {
           setUserId(session.user.id);
         } else if (event === 'SIGNED_OUT') {
           setUserId(null);
-          setSyncedEpisodes(new Set()); // Clear synced episodes on logout
+          setSyncedEpisodes(new Set());
         }
       }
     );
 
     return () => {
-      // Clean up the subscription when the component unmounts
       if (authListener && authListener.subscription) {
         authListener.subscription.unsubscribe();
       }
@@ -93,7 +112,6 @@ const HistoryScreen = ({ navigation }) => {
     }
 
     try {
-      // Check if record exists
       const { data: existingRecords, error: fetchError } = await supabase
         .from('episode_history')
         .select('*')
@@ -106,19 +124,15 @@ const HistoryScreen = ({ navigation }) => {
       }
 
       if (existingRecords && existingRecords.length > 0) {
-        // Keep only the newest record if multiple exist
         if (existingRecords.length > 1) {
           console.log(`Found ${existingRecords.length} duplicate entries for episode ${episode.episode_id}. Cleaning up...`);
           
-          // Sort by created_at (newest first)
           const sortedRecords = [...existingRecords].sort((a, b) => 
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
           );
           
-          // Keep the newest record
           const newestRecord = sortedRecords[0];
           
-          // Delete all except the newest
           for (let i = 1; i < sortedRecords.length; i++) {
             const { error: deleteError } = await supabase
               .from('episode_history')
@@ -130,7 +144,6 @@ const HistoryScreen = ({ navigation }) => {
             }
           }
           
-          // Update the remaining record
           const { error } = await supabase
             .from('episode_history')
             .update({
@@ -144,11 +157,9 @@ const HistoryScreen = ({ navigation }) => {
             console.error('Error updating episode in Supabase:', error);
           } else {
             console.log(`Updated episode ${episode.episode_id} in Supabase and cleaned up ${existingRecords.length - 1} duplicates`);
-            // Add to synced episodes set
             setSyncedEpisodes(prev => new Set(prev).add(episode.episode_id));
           }
         } else {
-          // Just update the single existing record
           const { error } = await supabase
             .from('episode_history')
             .update({
@@ -162,12 +173,10 @@ const HistoryScreen = ({ navigation }) => {
             console.error('Error updating episode in Supabase:', error);
           } else {
             console.log(`Updated episode ${episode.episode_id} in Supabase`);
-            // Add to synced episodes set
             setSyncedEpisodes(prev => new Set(prev).add(episode.episode_id));
           }
         }
       } else {
-        // Create new record
         const { error } = await supabase
           .from('episode_history')
           .insert({
@@ -186,7 +195,6 @@ const HistoryScreen = ({ navigation }) => {
           console.error('Error inserting episode to Supabase:', error);
         } else {
           console.log(`Added episode ${episode.episode_id} to Supabase`);
-          // Add to synced episodes set
           setSyncedEpisodes(prev => new Set(prev).add(episode.episode_id));
         }
       }
@@ -213,7 +221,6 @@ const HistoryScreen = ({ navigation }) => {
         console.error('Error deleting episode from Supabase:', error);
       } else {
         console.log(`Deleted episode ${episode.episode_id} from Supabase`);
-        // Remove from synced episodes set
         setSyncedEpisodes(prev => {
           const newSet = new Set(prev);
           newSet.delete(episode.episode_id);
@@ -242,7 +249,6 @@ const HistoryScreen = ({ navigation }) => {
         console.error('Error clearing history from Supabase:', error);
       } else {
         console.log('Cleared all episode history from Supabase');
-        // Clear synced episodes set
         setSyncedEpisodes(new Set());
       }
     } catch (err) {
@@ -250,7 +256,7 @@ const HistoryScreen = ({ navigation }) => {
     }
   };
 
-  // Fetch episodes from Supabase on initial load
+  // Fetch episodes from Supabase on initial load and import them to local storage
   const fetchSupabaseHistory = async () => {
     if (!userId) {
       console.log('Cannot fetch from Supabase: No user logged in');
@@ -275,8 +281,45 @@ const HistoryScreen = ({ navigation }) => {
         const episodeIds = data.map(item => item.episode_id);
         setSyncedEpisodes(new Set(episodeIds));
         
-        // Update local episodes with Supabase data if needed
-        // This depends on your app's sync strategy
+        // Create a map of existing local episodes by episode_id for quick lookup
+        const localEpisodesMap = new Map();
+        episodes2.forEach(ep => {
+          localEpisodesMap.set(ep.episode_id, ep);
+        });
+        
+        // Import Supabase episodes into local storage if they don't exist locally
+        // or if the Supabase version is newer
+        let updatedLocalStorage = false;
+        
+        data.forEach(supabaseEp => {
+          const localEp = localEpisodesMap.get(supabaseEp.episode_id);
+          
+          // If the episode doesn't exist locally or Supabase version is newer
+          if (!localEp || new Date(supabaseEp.created_at) > new Date(localEp.created_at || '')) {
+            // Convert Supabase episode to local Episode format
+            const episode: Episode = {
+              id: Date.now() + Math.random(), // Generate a unique ID for the local episode
+              episode_id: supabaseEp.episode_id,
+              series_id: supabaseEp.series_id,
+              title: supabaseEp.title,
+              image_url: supabaseEp.image_url,
+              duration: supabaseEp.duration || 0,
+              saved_position: supabaseEp.saved_position || 0,
+              created_at: supabaseEp.created_at,
+              provider: supabaseEp.provider || 'Unknown'
+            };
+            
+            // Add to local episodes
+            addEpisode(episode);
+            updatedLocalStorage = true;
+            console.log(`Imported episode ${episode.episode_id} from Supabase to local storage`);
+          }
+        });
+        
+        if (updatedLocalStorage) {
+          // If we updated the local storage, process episodes again
+          processEpisodes();
+        }
       }
     } catch (err) {
       console.error('Unexpected error fetching from Supabase:', err);
@@ -299,6 +342,8 @@ const HistoryScreen = ({ navigation }) => {
 
   // Function to process episodes and update display order
   const processEpisodes = useCallback(() => {
+    console.log(`Processing ${episodes2.length} episodes for display...`);
+    
     // Get unique episodes by keeping the most recent entry for each episode_id
     const map = new Map<string, Episode>();
     
@@ -338,6 +383,7 @@ const HistoryScreen = ({ navigation }) => {
       });
     }
     
+    console.log(`Setting display order with ${sorted.length} episodes`);
     setDisplayOrder(sorted);
   }, [episodes2, clickedOrder]);
 
@@ -353,6 +399,11 @@ const HistoryScreen = ({ navigation }) => {
     }
   }, [userId]);
 
+  // When episodes2 changes, update display
+  useEffect(() => {
+    processEpisodes();
+  }, [episodes2, processEpisodes]);
+
   // Sync local episodes to Supabase only after we know which ones are already synced
   useEffect(() => {
     if (syncedEpisodes.size > 0 || userId) {
@@ -363,13 +414,13 @@ const HistoryScreen = ({ navigation }) => {
   // Auto refresh when screen comes into focus
   useFocusEffect(
     useCallback(() => {
+      console.log('Screen came into focus, refreshing...');
       processEpisodes();
       if (userId) {
-        // Just refresh the local state when focusing, don't refetch from Supabase every time
-        // This avoids excessive API calls
+        fetchSupabaseHistory(); // Changed to always fetch when focusing
       }
       return () => {}; // Cleanup function
-    }, [processEpisodes])
+    }, [processEpisodes, userId])
   );
 
   // Pull-to-refresh handler
@@ -413,7 +464,7 @@ const HistoryScreen = ({ navigation }) => {
       case 'Animemaster':
         navigation.navigate('Animemaster', { episodeId: episode.episode_id });
         break;
-        case 'Animekai':
+      case 'Animekai':
         navigation.navigate('Animekai', { episodeId: episode.episode_id });
         break;
       default:

@@ -28,6 +28,7 @@ import { useAnimeId } from "../context/EpisodeContext"; // adjust path as needed
 import { useEpisode } from "../context/EpisodeHistoryProvider";  // adjust path as needed :contentReference[oaicite:0]{index=0}&#8203;:contentReference[oaicite:1]{index=1}
 import AsyncStorage from '@react-native-async-storage/async-storage'; // Make sure AsyncStorage is installed
 import { StackNavigationProp } from "@react-navigation/stack";
+import { useKeepAwake } from "expo-keep-awake";
 
 const { height, width } = Dimensions.get("window");
 
@@ -103,6 +104,9 @@ const [videoError, setVideoError] = useState(false);
 const [dub, setDub] = useState<boolean | string | null>(null);
    const [error, setError] = useState<string | null>(null);
  const [isDubMode, setIsDubMode] = useState(false);
+ 
+
+       useKeepAwake();
  
   const formatTime = (time: number) => {
     const minutes = Math.floor(time / 60);
@@ -827,15 +831,29 @@ const handleNextEpisode = () => {
                     )}
                   </View>
                   <View style={styles.centerControls}>
-                    <TouchableOpacity style={styles.controlButton}>
-                      <Ionicons name="play-back" size={24} color="white" />
-                    </TouchableOpacity>
+                    <TouchableOpacity
+      onPress={handlePreviousEpisode}
+      disabled={currentEpisode && currentIndex <= 0}
+      style={[
+        styles.navButton,
+        (currentEpisode && currentIndex <= 0) && styles.disabledButton,
+      ]}
+    >
+      <Ionicons name="chevron-back" size={30} color="white" />
+    </TouchableOpacity>
                     <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
                       <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.controlButton}>
-                      <Ionicons name="play-forward" size={24} color="white" />
-                    </TouchableOpacity>
+                  <TouchableOpacity
+      onPress={handleNextEpisode}
+      disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
+      style={[
+        styles.navButton,
+        (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
+      ]}
+    >
+      <Ionicons name="chevron-forward" size={30} color="white" />
+    </TouchableOpacity>
                   </View>
                   <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
                 </View>

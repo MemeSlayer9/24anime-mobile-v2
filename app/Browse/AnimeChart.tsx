@@ -20,34 +20,44 @@ interface AnimeChartProps {
 
 const AnimeChart: React.FC<AnimeChartProps> = () => {
 
-   type RootStackParamList = {
-  Details: { id: string };
-};
-
-type NavigationProp = StackNavigationProp<RootStackParamList, 'Details'>;
-
- 
-  interface AnimeItem {
-  id: string;
-  title: {
-    userPreferred: string;
+  type RootStackParamList = {
+    Details: { id: string };
   };
-  genres: string[];
-  currentEpisode: number | null;
-  image: string;
-  status: string;
-  type: string;
-  rating: number;
-  totalEpisodes: number;
-  description: string;
-}
+
+  type NavigationProp = StackNavigationProp<RootStackParamList, 'Details'>;
+
+  interface AnimeItem {
+    id: string;
+    title: {
+      userPreferred: string;
+    };
+    genres: string[];
+    currentEpisode: number | null;
+    image: string;
+    status: string;
+    type: string;
+    rating: number;
+    totalEpisodes: number;
+    description: string;
+  }
+  
+  // Helper function to determine current season based on month
+  const getCurrentSeason = (): string => {
+    const month = new Date().getMonth() + 1; // getMonth() returns 0-11
+    
+    if (month >= 1 && month <= 3) return 'WINTER';
+    if (month >= 4 && month <= 6) return 'SPRING';
+    if (month >= 7 && month <= 9) return 'SUMMER';
+    return 'FALL'; // months 10-12
+  };
+  
   // State definitions
   const [anime, setAnime] = useState([]);
   const [otherAnime, setOtherAnime] = useState([]);
   const [loading, setLoading] = useState(true);
   const [format, setFormat] = useState('TV');
-  const [year, setYear] = useState('2025');
-  const [season, setSeason] = useState('WINTER');
+  const [year, setYear] = useState(new Date().getFullYear().toString());
+  const [season, setSeason] = useState(getCurrentSeason());
   const [page, setPage] = useState(1);
   const [showOtherAnime, setShowOtherAnime] = useState(false);
   const navigation = useNavigation<NavigationProp>();
@@ -62,13 +72,12 @@ type NavigationProp = StackNavigationProp<RootStackParamList, 'Details'>;
     Years.push(yr.toString());
   }
 
-  
-
   // Handlers for pickers
-const handleSeasonChange = (selectedValue: string) => {
-  setSeason(selectedValue);
-  setShowOtherAnime(false);
-};
+  const handleSeasonChange = (selectedValue: string) => {
+    setSeason(selectedValue);
+    setShowOtherAnime(false);
+  };
+  
   const handleFormatChange = (selectedValue: string) => {
     setFormat(selectedValue);
     setShowOtherAnime(false);
@@ -108,40 +117,44 @@ const handleSeasonChange = (selectedValue: string) => {
     }
   };
 
+  // Set initial season based on current month when component mounts
+  useEffect(() => {
+    setSeason(getCurrentSeason());
+  }, []);
+
   useEffect(() => {
     fetchData();
   }, [page, format, year, season]);
 
   // Render individual anime item
-const renderItem = ({ item }: { item: AnimeItem }) => (
-  <View style={styles.itemContainer}>
-    <TouchableOpacity
-      onPress={() => navigation.navigate('Details', { id: item.id })}
-      style={styles.episodeContainer}
-    >
-      <Text style={styles.title}>{item.title.userPreferred}</Text>
-      <Text style={styles.genres}>Genres: {item.genres.join(", ")}</Text>
-      {item.currentEpisode !== null && (
-        <Text style={styles.status}>Current Episodes: {item.currentEpisode}</Text>
-      )}
-      <View style={styles.flexContainer}>
-        <Image source={{ uri: item.image }} style={styles.image} />
-        <View style={styles.textContainer}>
-          <Text style={styles.status}>{item.status}</Text>
-          <Text style={styles.status}>{item.type}</Text>
-          <Text style={styles.status}>Ratings: {item.rating}%</Text>
-          <Text style={styles.status}>Total Episodes: {item.totalEpisodes}</Text>
-          <View style={styles.descriptionWrapper}>
-            <ScrollView>
-              <Text style={styles.description}>{item.description}</Text>
-            </ScrollView>
+  const renderItem = ({ item }: { item: AnimeItem }) => (
+    <View style={styles.itemContainer}>
+      <TouchableOpacity
+        onPress={() => navigation.navigate('Details', { id: item.id })}
+        style={styles.episodeContainer}
+      >
+        <Text style={styles.title}>{item.title.userPreferred}</Text>
+        <Text style={styles.genres}>Genres: {item.genres.join(", ")}</Text>
+        {item.currentEpisode !== null && (
+          <Text style={styles.status}>Current Episodes: {item.currentEpisode}</Text>
+        )}
+        <View style={styles.flexContainer}>
+          <Image source={{ uri: item.image }} style={styles.image} />
+          <View style={styles.textContainer}>
+            <Text style={styles.status}>{item.status}</Text>
+            <Text style={styles.status}>{item.type}</Text>
+            <Text style={styles.status}>Ratings: {item.rating}%</Text>
+            <Text style={styles.status}>Total Episodes: {item.totalEpisodes}</Text>
+            <View style={styles.descriptionWrapper}>
+              <ScrollView>
+                <Text style={styles.description}>{item.description}</Text>
+              </ScrollView>
+            </View>
           </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  </View>
-);
-
+      </TouchableOpacity>
+    </View>
+  );
 
   if (loading) {
     return (
@@ -222,7 +235,7 @@ const renderItem = ({ item }: { item: AnimeItem }) => (
         <View style={styles.animeSection}>
           {!showOtherAnime ? (
             <View>
-               <FlatList
+              <FlatList
                 data={anime}
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={renderItem}
@@ -239,25 +252,25 @@ const renderItem = ({ item }: { item: AnimeItem }) => (
             </View>
           )}
         </View>
-          <View style={styles.paginationContainer}>
-                <TouchableOpacity
-                  style={[styles.button, page === 1 && styles.disabledButton]}
-                  onPress={() => {
-                    if (page > 1) setPage(page - 1);
-                  }}
-                  disabled={page === 1}
-                >
-                  <Text style={styles.buttonText}>Previous</Text>
-                </TouchableOpacity>
-                {/* Updated the page text styling here */}
-                <Text style={styles.pageText}>{page}</Text>
-                <TouchableOpacity
-                  style={styles.button}
-                  onPress={() => setPage(page + 1)}
-                >
-                  <Text style={styles.buttonText}>Next</Text>
-                </TouchableOpacity>
-              </View>
+        <View style={styles.paginationContainer}>
+          <TouchableOpacity
+            style={[styles.button, page === 1 && styles.disabledButton]}
+            onPress={() => {
+              if (page > 1) setPage(page - 1);
+            }}
+            disabled={page === 1}
+          >
+            <Text style={styles.buttonText}>Previous</Text>
+          </TouchableOpacity>
+          {/* Updated the page text styling here */}
+          <Text style={styles.pageText}>{page}</Text>
+          <TouchableOpacity
+            style={styles.button}
+            onPress={() => setPage(page + 1)}
+          >
+            <Text style={styles.buttonText}>Next</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );
@@ -267,10 +280,8 @@ const styles = StyleSheet.create({
   // Outer container fills the entire screen
   container: {
     flex: 1,
-        backgroundColor: '#222',
-
-    
-   },
+    backgroundColor: '#222',
+  },
   // Ensures the vertical scroll view takes all available space
   contentContainer: {
     flexGrow: 1,
@@ -391,14 +402,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     maxWidth: 150,
   },
-   paginationContainer: {
+  paginationContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingHorizontal: 10,
     paddingVertical: 15,
     backgroundColor: '#222', // matching the background if needed
   },
- 
   // Define button and disabledButton styles if not already defined
   button: {
     padding: 10,
@@ -408,14 +418,14 @@ const styles = StyleSheet.create({
   disabledButton: {
     opacity: 0.5,
   },
-   pageText: {
+  pageText: {
     fontSize: 20,
     fontWeight: '600',
     color: '#fff',
     textAlign: 'center',
     paddingHorizontal: 15,
     paddingVertical: 5,
-     borderRadius: 5,
+    borderRadius: 5,
     // Optionally, add a shadow for iOS or elevation for Android:
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
