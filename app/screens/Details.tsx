@@ -8,6 +8,7 @@ import {
   FlatList,
   TouchableOpacity,
   TextInput,
+  Animated,
 } from "react-native";
 import { RouteProp, useRoute, useNavigation } from "@react-navigation/native";
 import { StackNavigationProp } from "@react-navigation/stack";
@@ -29,6 +30,12 @@ import { slugMapping } from "../mapping/slugMapping"; // adjust the relative pat
 import { zoroSlug } from "../mapping/zoroSlugMapping";
 import { useBookMarkId  } from "../context/BookmarkContent";
 import { Ionicons } from '@expo/vector-icons';
+import { useUser } from "../context/UserContext";
+import { supabase } from '../supabase/supabaseClient';
+
+
+type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
+
 
 // Define the route type for this screen
 type DetailsScreenRouteProp = RouteProp<RootStackParamList, "Details">;
@@ -38,6 +45,7 @@ const Details = () => {
   const { id } = route.params;
   const { setAnimeId, setEpisodeid } = useAnimeId();
    const { setbookMarkId } = useBookMarkId ();
+   const { user } = useUser(); // Get user from context
 
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const [provider, setProvider] = useState("zoro");
@@ -49,7 +57,11 @@ const Details = () => {
   const [slug, setSlug] = useState<string>("");
   const [anicrushEpisodes, setAnicrushEpisodes] = useState<Episode[]>([]);
   const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
-
+  const [notificationOpacity] = useState(new Animated.Value(0)); // Add this for animation
+   const [notificationMessage, setNotificationMessage] = useState('Added to My Playlist');
+  const [notificationIconName, setNotificationIconName] = useState<IoniconsName>('checkmark-circle');
+  const [notificationIconColor, setNotificationIconColor] = useState('#4CD964');
+  
   const [anime, setAnime] = useState<Anime | null>(null);
   const [anime2, setAnime2] = useState<Anime2 | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -202,21 +214,83 @@ const fetchBackupImage = async () => {
     setLoading(false);
   }
 };
-
-const handleAddBookmark = (id?: number): void => {
-  if (id == null) return;       // guard against undefined
-  setbookMarkId(id);
-  setIsBookmarked(true);
-  console.log('Bookmark clicked, selectId:', id);
-};
-  useEffect(() => {
-    if (isBookmarked) {
-      const timer = setTimeout(() => {
-         setIsBookmarked(false); // Hide the message after 2 seconds
-      }, 2000);
-      return () => clearTimeout(timer);
+const handleAddBookmark = async (id?: number): Promise<void> => {
+  if (id == null) return; // guard against undefined
+  
+  // Check if already bookmarked
+  if (isBookmarked) {
+    try {
+      // Remove from bookmarks if already bookmarked
+      const { error } = await supabase
+        .from('playlists')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('episode_id', id);
+      
+      if (error) {
+        console.error('Error removing bookmark:', error);
+        return;
+      }
+      
+      setIsBookmarked(false);
+       setNotificationIconName('close-circle');
+      setNotificationIconColor('#FF3B30'); // Red color for removal
+    } catch (error) {
+      console.error('Error removing bookmark:', error);
     }
-  }, [isBookmarked]);
+  } else {
+    // Add to bookmarks if not already bookmarked
+    setbookMarkId(id);
+    setIsBookmarked(true);
+    setNotificationMessage('Added to My Playlist');
+    setNotificationIconName('checkmark-circle');
+    setNotificationIconColor('#4CD964'); // Green color for success
+  }
+  
+  // Animate the notification appearance
+  Animated.sequence([
+    Animated.timing(notificationOpacity, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true
+    }),
+    Animated.delay(1500),
+    Animated.timing(notificationOpacity, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true
+    })
+  ]).start();
+};
+
+
+useEffect(() => {
+  const checkIfBookmarked = async () => {
+    if (user && anime?.id) {
+      try {
+        // Check directly in the Supabase playlists table for the current user and anime
+        const { data, error } = await supabase
+          .from('playlists')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('episode_id', anime.id);
+        
+        if (error) {
+          console.error('Error checking bookmark status:', error);
+          return;
+        }
+        
+        // If we found any records, the anime is bookmarked
+        setIsBookmarked(data && data.length > 0);
+      } catch (error) {
+        console.error('Error checking bookmark status:', error);
+      }
+    }
+  };
+  
+  checkIfBookmarked();
+}, [user, anime]);
+ 
 
 // Similarly, update your fetchEpisode function:
 const fetchEpisode = async () => {
@@ -381,8 +455,7 @@ useEffect(() => {
         style={styles.episodeContainer}
         onPress={() => {
           const formattedEpisodeId = item.episodeId
-            .replace("?", "$")
-            .replace("ep=", "episode$");
+        
           setEpisodeid(formattedEpisodeId);
                   setAnimeId(mappedZoroId);
 
@@ -552,19 +625,59 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
                  
  
         </View>
-        <TouchableOpacity
-  onPress={() => {
-    const animeId = anime?.id;
-    if (animeId !== undefined) {
-      // Ensure we're passing a number to the handler
-      handleAddBookmark(typeof animeId === 'string' ? Number(animeId) : animeId);
-    }
-  }}
-  style={styles.bookmarkButton}
->
-  <Ionicons name="bookmark-outline" size={30} color="#DB202C" />
-</TouchableOpacity>
+        
+        <Animated.View 
+        style={[
+          styles.notificationContainer, 
+          { opacity: notificationOpacity }
+        ]}
+      >
+        <View style={styles.notificationContent}>
+          <Ionicons name="checkmark-circle" size={20} color="#4CD964" />
+          <Text style={styles.notificationText}>Added to My Playlist</Text>
+        </View>
+      </Animated.View>
 
+      {/* Existing UI */}
+      <LinearGradient
+        colors={[
+          "#161616",
+          "rgba(22, 22, 22, 0.9)",
+          "rgba(22, 22, 22, 0.8)",
+        ]}
+        style={styles.gradient}
+      >
+
+      </LinearGradient>
+      <Animated.View 
+  style={[
+    styles.notificationContainer, 
+    { opacity: notificationOpacity }
+  ]}
+>
+  <View style={styles.notificationContent}>
+    <Ionicons name={notificationIconName} size={20} color={notificationIconColor} />
+    <Text style={styles.notificationText}>{notificationMessage}</Text>
+  </View>
+</Animated.View>
+      {user && (
+          <TouchableOpacity
+            onPress={() => {
+              const animeId = anime?.id;
+              if (animeId !== undefined) {
+                // Ensure we're passing a number to the handler
+                handleAddBookmark(typeof animeId === 'string' ? Number(animeId) : animeId);
+              }
+            }}
+            style={styles.bookmarkButton}
+          >
+            <Ionicons 
+              name={isBookmarked ? "bookmark" : "bookmark-outline"} 
+              size={30} 
+              color="#DB202C" 
+            />
+          </TouchableOpacity>
+        )}
    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
   {tabs.map((tab) => {
     const isActive = activeTab === tab.key;
@@ -973,6 +1086,40 @@ const styles = StyleSheet.create({
     height: 200,
     borderRadius: 10,
     marginRight: 10,
+  },
+  notificationContainer: {
+    position: 'absolute',
+    top: 40,
+    left: 0,
+    right: 0,
+    zIndex: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+  },
+  
+  notificationContent: {
+    backgroundColor: 'rgba(22, 22, 22, 0.9)',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  
+  notificationText: {
+    color: '#FFFFFF',
+    marginLeft: 8,
+    fontWeight: '500',
   },
 });
 

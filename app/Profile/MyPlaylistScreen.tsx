@@ -11,15 +11,25 @@ import {
 } from 'react-native';
 import axios from 'axios';
 import { useNavigation } from '@react-navigation/native';
-  import { useBookMarkId  } from "../context/BookmarkContent";
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useBookMarkId } from "../context/BookmarkContent";
 import { usePlaylist } from '../context/MyPlaylistProvider';
 import { supabase } from '../supabase/supabaseClient';
 import { Ionicons } from '@expo/vector-icons';
 
+// Define your navigation types
+type RootStackParamList = {
+  Details: { id: string | number };
+  // Add other screens as needed
+};
+
+// Create a properly typed navigation hook
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Details'>;
+
 const MyPlaylist = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp>();
   // Retrieve both bookMarkId and setbookMarkId so we can reset the trigger.
-  const { bookMarkId, setbookMarkId } = useBookMarkId ();
+  const { bookMarkId, setbookMarkId } = useBookMarkId();
   const { clearPlaylist: clearLocalPlaylist } = usePlaylist();
 
   const [item, setItem] = useState<any>(null);
@@ -78,7 +88,7 @@ const MyPlaylist = () => {
 
   // Listen for authentication state changes.
   useEffect(() => {
-    const { subscription } = supabase.auth.onAuthStateChange((event) => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         clearLocalStatePlaylist();
         setUser(null);
@@ -86,8 +96,9 @@ const MyPlaylist = () => {
         fetchUserAndPlaylist();
       }
     });
+    
     return () => {
-      subscription?.unsubscribe();
+      data.subscription.unsubscribe();
     };
   }, []);
 
@@ -250,9 +261,7 @@ const MyPlaylist = () => {
               <View key={index} style={styles.itemContainer}>
                 {episode.episode_id && (
                   <TouchableOpacity
-                    onPress={() =>
-                      navigation.navigate('Details', { id: episode.episode_id })
-                    }
+                    onPress={() => navigation.navigate('Details', { id: episode.episode_id })}
                     style={styles.rowContainer}
                   >
                     {episode.episode_image && (
@@ -275,9 +284,7 @@ const MyPlaylist = () => {
 
                 {episode.id && (
                   <TouchableOpacity
-                    onPress={() =>
-                      navigation.navigate('Details', { id: episode.id })
-                    }
+                    onPress={() => navigation.navigate('Details', { id: episode.id })}
                     style={styles.rowContainer}
                   >
                     {episode.image && (

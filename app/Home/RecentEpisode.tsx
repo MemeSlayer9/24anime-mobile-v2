@@ -89,10 +89,14 @@ const RecentEpisodes = () => {
       onPressOut={() => handlePressOut(item.id)}
       onPress={() => {
         const episodeId = item.latestEpisode ? item.latestEpisode.id : null;
-        setEpisodeid(episodeId);
+        // Transform the episode ID by replacing "$" with "?" and "episode$" with "ep="
+        const transformedEpisodeId = episodeId 
+          ? episodeId.replace("$", "?").replace("episode$", "ep=")
+          : null;
+        setEpisodeid(transformedEpisodeId);
         // Convert item.id from string to number to match expected type
         setAnimeId(item.id);
-        navigation.navigate('Zoro', { episodeId });
+        navigation.navigate('Zoro', { episodeId: transformedEpisodeId });
       }}
       style={({ pressed }) => [
         styles.card,

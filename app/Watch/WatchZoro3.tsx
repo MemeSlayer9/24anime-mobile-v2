@@ -45,8 +45,10 @@ interface VideoRefMethods {
 }
 
 interface Subtitle {
-  url: string;
+  url?: string;  // Make url optional since API might use 'file' instead
+  file?: string; // Add file property as optional
   lang: string;
+  label?: string; // Also add label as it's used in your subtitle conversion
 }
 
 interface Segment {
@@ -224,39 +226,85 @@ const handleDubClick = () => {
   setIsDubMode(true);
   fetchVideoWithDubSetting(true);
 };
-console.log(episodeid);
+
 const fetchVideoWithDubSetting = async (isDub: boolean): Promise<void> => {
   try {
-    const url = `https://deeper-six.vercel.app/api/v2/hianime/episode/sources?animeEpisodeId=${episodeid}?category=${isDub ? 'true' : 'false'}`;
+    // First API call to get the embed URL from headers
+    const firstUrl = `https://partyonyou.vercel.app/anime/zoro/watch/${episodeid}?dub=${isDub ? 'true' : 'false'}`;
     
-    const response = await axios.get(url);
-    const json = response.data.data;
-    if (json.sources && json.sources.length > 0) {
-      const sourceUrl = json.sources[0].url;
-      setInitialVideoSource(sourceUrl);
-      setVideoSource(sourceUrl);
-      setSelectedQuality(sourceUrl);
-    }
-    if (json.subtitles) {
-      setSubtitles(json.subtitles);
-      const englishSubtitle = (json.subtitles as Subtitle[]).find((sub) =>
-        sub.lang.toLowerCase().includes("en") || sub.lang.toLowerCase().includes("english")
-      );
-      if (englishSubtitle) {
-        setSelectedSubtitle(englishSubtitle.lang);
+    const firstResponse = await axios.get(firstUrl);
+    const firstJson = firstResponse.data;
+    
+    // Check if we have headers with Referer
+    if (firstJson.headers && firstJson.headers.Referer) {
+      const embedUrl = firstJson.headers.Referer;
+      
+      // Second API call to get actual video sources
+      const secondUrl = `https://shih.kaoru.cat/sources?url=${encodeURIComponent(embedUrl)}`;
+      
+      const secondResponse = await axios.get(secondUrl);
+      const secondJson = secondResponse.data;
+      
+      // Set video source from the second API response
+      if (secondJson.sources && secondJson.sources.length > 0) {
+        const sourceUrl = secondJson.sources[0].file;
+        setInitialVideoSource(sourceUrl);
+        setVideoSource(sourceUrl);
+        setSelectedQuality(sourceUrl);
       }
+      
+      // Set subtitles from the second API response (tracks)
+      if (secondJson.tracks && Array.isArray(secondJson.tracks)) {
+        // Filter out thumbnails and only keep subtitle tracks
+        const subtitleTracks = secondJson.tracks.filter((track: any) => 
+          track.kind === 'captions' && track.file && track.file.trim() !== ''
+        );
+        
+        console.log("🎬 Found subtitle tracks:", subtitleTracks);
+        
+        // Convert tracks to your subtitle format
+        const convertedSubtitles = subtitleTracks.map((track: any) => ({
+          url: track.file, // Make sure we're using the correct property name
+          lang: track.label || track.language || 'Unknown',
+          label: track.label || track.language || 'Unknown'
+        }));
+        
+        setSubtitles(convertedSubtitles);
+        
+        // Find English subtitle
+        const englishSubtitle = subtitleTracks.find((track: any) =>
+          (track.label && track.label.toLowerCase().includes("en")) || 
+          (track.label && track.label.toLowerCase().includes("english")) ||
+          (track.language && track.language.toLowerCase().includes("en"))
+        );
+        
+        if (englishSubtitle) {
+          setSelectedSubtitle(englishSubtitle.label || englishSubtitle.language);
+        } else {
+          // If no English subtitle found, reset to disabled
+          setSelectedSubtitle("disabled");
+        }
+      } else {
+        console.log("🎬 No subtitle tracks found");
+        setSubtitles([]);
+        setSelectedSubtitle("disabled");
+      }
+      
+      // Set intro/outro from second API response
+      if (secondJson.intro) {
+        setIntroSegment(secondJson.intro);
+      }
+      if (secondJson.outro) {
+        setOutroSegment(secondJson.outro);
+      }
+    } else {
+      console.error("No Referer header found in first API response");
     }
-    if (json.intro) {
-      setIntroSegment(json.intro);
-    }
-    if (json.outro) {
-      setOutroSegment(json.outro);
-    }
+    
   } catch (error) {
     console.error("Error fetching video data: ", error);
   } finally {
     // Reset loading state once fetch is complete
-    // Adding a slight delay to ensure UI updates smoothly
     setTimeout(() => setEpisodeLoading(false), 500);
   }
 };
@@ -352,33 +400,39 @@ useEffect(() => {
     fetchQualities();
   }
 }, [initialVideoSource]);
-
-  const parseVTT = (vttText: string) => {
-    const cues: Array<{ start: number; end: number; text: string }> = [];
-    const lines = vttText.split("\n");
-    let cue: { start: number; end: number; text: string } | null = null;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.includes("-->")) {
-        const [startStr, endStr] = line.split("-->");
-        const start = parseTime(startStr.trim());
-        const end = parseTime(endStr.trim());
-        cue = { start, end, text: "" };
-      } else if (line === "" && cue) {
-        cues.push(cue);
-        cue = null;
-      } else if (cue) {
-        cue.text += line + " ";
-      }
-    }
-    // Push the last cue if the file does not end with a blank line.
-    if (cue) {
-      cues.push(cue);
-    }
-    return cues;
-  };
-
+const parseVTT = (vttText: string) => {
+  console.log("📝 VTT Text received:", vttText.substring(0, 200)); // Log first 200 chars
   
+  const cues = [];
+  const lines = vttText.split("\n");
+  let cue = null;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    if (line.includes("-->")) {
+      const [startStr, endStr] = line.split("-->");
+      const start = parseTime(startStr.trim());
+      const end = parseTime(endStr.trim());
+      cue = { start, end, text: "" };
+    } else if (line === "" && cue) {
+      if (cue.text.trim()) { // Only add non-empty cues
+        cues.push(cue);
+      }
+      cue = null;
+    } else if (cue && line && !line.match(/^\d+$/)) { // Skip sequence numbers
+      cue.text += line + " ";
+    }
+  }
+  
+  // Push the last cue if exists
+  if (cue && cue.text.trim()) {
+    cues.push(cue);
+  }
+  
+  console.log("🎬 Parsed cues:", cues.length);
+  return cues;
+};
 
   // Helper: Convert time string (e.g. "00:01:23.456") to seconds.
   const parseTime = (timeStr: string) => {
@@ -398,23 +452,54 @@ useEffect(() => {
   useEffect(() => {
     const fetchSubtitle = async () => {
       if (selectedSubtitle !== "disabled") {
-        // Find the subtitle object for the selected language.
+        // Find the subtitle object for the selected language
         const subtitleObj = subtitles.find((sub) => sub.lang === selectedSubtitle);
+        
         if (subtitleObj) {
+          // Check if the URL exists and is not empty
+          const subtitleUrl = subtitleObj.url || subtitleObj.file;
+          
+          if (!subtitleUrl || subtitleUrl.trim() === '') {
+            console.warn("⚠️ Subtitle URL is empty or undefined:", subtitleObj);
+            setParsedSubtitles([]);
+            setCurrentSubtitle("");
+            return;
+          }
+          
           try {
-            const response = await axios.get(subtitleObj.url);
+            console.log("🎬 Fetching subtitle from:", subtitleUrl);
+            const response = await axios.get(subtitleUrl);
             const vttText = response.data;
+            
+            if (!vttText || vttText.trim() === '') {
+              console.warn("⚠️ Subtitle content is empty");
+              setParsedSubtitles([]);
+              setCurrentSubtitle("");
+              return;
+            }
+            
             const cues = parseVTT(vttText);
             setParsedSubtitles(cues);
+            console.log("✅ Successfully loaded", cues.length, "subtitle cues");
+            
           } catch (error) {
-            console.error("Error fetching subtitle file:", error);
+            console.error("❌ Error fetching subtitle file:", error);
+            // Fallback: clear subtitles if fetching fails
+            setParsedSubtitles([]);
+            setCurrentSubtitle("");
           }
+        } else {
+          console.warn("⚠️ No subtitle object found for language:", selectedSubtitle);
+          setParsedSubtitles([]);
+          setCurrentSubtitle("");
         }
       } else {
+        // Disabled subtitles
         setParsedSubtitles([]);
         setCurrentSubtitle("");
       }
     };
+    
     fetchSubtitle();
   }, [selectedSubtitle, subtitles]);
 
@@ -598,10 +683,7 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
         style={styles.episodeContainer}
         onPress={() => {
           setEpisodeLoading(true);
-          const formattedEpisodeId = item.id
-          .replace("$", "?")
-          .replace("episode$", "ep=");
-          
+          const formattedEpisodeId = item.id;
           
           setEpisodeid(formattedEpisodeId);
           navigation.navigate("Zoro");
@@ -659,33 +741,25 @@ const currentBackupIndex = filteredBackupEpisodes.findIndex(
         style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
       >
         <VideoWithSubtitles
-  ref={videoRef}
-  source={{ 
-    uri: videoSource,
-    headers: {
-      "Referer": "https://megacloud.blog/"
-      },
-  }}
-  style={styles.video}
-  resizeMode={ResizeMode.CONTAIN}
-  shouldPlay
-  volume={volume}
-  onLoad={() => {
-    console.log('Video loaded successfully');
-  }}
-   
-  onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-  textTracks={subtitles.map(sub => ({
-    uri: sub.url,
-    language: sub.lang,
-    type: "text/vtt",
-    title: sub.lang,
-  }))}
-  selectedTextTrack={{
-    type: selectedSubtitle === "disabled" ? "disabled" : "title",
-    value: selectedSubtitle,
-  }}
-/>
+          ref={videoRef}
+          source={{ uri: videoSource }}
+          style={styles.video}
+          resizeMode={ResizeMode.CONTAIN}
+          shouldPlay
+          volume={volume}
+          onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+          textTracks={subtitles.map(sub => ({
+            uri: sub.url,
+            language: sub.lang,
+            type: "text/vtt",
+            title: sub.lang,
+          }))}
+          selectedTextTrack={{
+            type: selectedSubtitle === "disabled" ? "disabled" : "title",
+            value: selectedSubtitle,
+          }}
+        />
+        
       
         {currentSubtitle && (
           <View style={styles.subtitleContainer}>

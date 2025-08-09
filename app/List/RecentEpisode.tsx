@@ -82,10 +82,15 @@ const RecentEpisode: React.FC<RecentEpisodeProps> = () => {
       style={styles.itemContainer}
       onPress={() => {
         const episodeId = item.latestEpisode ? item.latestEpisode.id : null;
-                setAnimeId(item.id);
+        setAnimeId(item.id);
 
-        setEpisodeid(episodeId);
-        navigation.navigate('Zoro', { episodeId });
+        // Transform the episode ID by replacing "$" with "?" and "episode$" with "ep="
+        const transformedEpisodeId = episodeId 
+          ? episodeId.replace("$", "?").replace("episode$", "ep=")
+          : null;
+        
+        setEpisodeid(transformedEpisodeId);
+        navigation.navigate('Zoro', { episodeId: transformedEpisodeId });
       }}
     >
       <Image source={{ uri: item.image }} style={styles.image} resizeMode="cover" />

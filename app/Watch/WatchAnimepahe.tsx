@@ -326,19 +326,20 @@ const handleDownload = async (url: string) => {
   }, [modalVisible, episodeid]);
 
 
- const fetchVideoData = async () => {
+  const fetchVideoData = async () => {
     try {
       const response = await axios.get(`https://kangaroo-kappa.vercel.app/anime/animepahe/watch?episodeId=${episodeid}`);
       const json = response.data;
+      
       if (json.sources && json.sources.length > 0) {
-        // Store all sources
+        // Store all sources with original URLs
         setSources(json.sources);
         
         // Find the 1080p BD non-dubbed source as default
         const defaultSource = json.sources.find(
-          (source: VideoSource) => source.isM3U8 === true && 
-                   source.quality === "EMBER · 1080p BD" && 
-                   source.isDub === false
+          (source: VideoSource) => source.isM3U8 === true &&
+                  source.quality === "EMBER · 1080p BD" &&
+                  source.isDub === false
         );
         
         // If the preferred source exists, use it; otherwise fall back to the first source
@@ -351,7 +352,7 @@ const handleDownload = async (url: string) => {
       console.error("Error fetching video data: ", error);
     }
   };
-
+  
  
 
   
@@ -361,20 +362,7 @@ const handleDownload = async (url: string) => {
   
 }, [episodeid, isDubMode]);
 
-const handleBackPress = async () => {
-  if (isFullscreen) {
-    try {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-      await NavigationBar.setVisibilityAsync("visible");
-      navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-      StatusBar.setHidden(false);
-      setIsFullscreen(false);
-    } catch (error) {
-      console.error("Error returning to portrait mode:", error);
-    }
-  }
-  navigation.goBack();
-};
+ 
 useEffect(() => {
   const backAction = () => {
     if (isFullscreen) {
@@ -742,8 +730,7 @@ const handleNextEpisode = () => {
     // Video playing state - show video and controls
     <>
           
-
-       <VideoWithSubtitles
+        <VideoWithSubtitles
         ref={videoRef}
         source={{ uri: videoSource }}
         style={styles.video}
@@ -788,9 +775,7 @@ const handleNextEpisode = () => {
               </Text>
             )}
                 <View style={styles.rightControls}>
-                  <TouchableOpacity onPress={() => setSubtitlesPickerVisible(true)}>
-                    <Ionicons name="text" size={24} color="white" />
-                  </TouchableOpacity>
+                
                   <TouchableOpacity onPress={() => setPickerVisible(true)}>
                     <Ionicons name="settings" size={24} color="white" />
                   </TouchableOpacity>

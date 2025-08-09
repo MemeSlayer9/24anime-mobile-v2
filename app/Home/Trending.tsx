@@ -9,15 +9,12 @@ import {
   TouchableOpacity,
   Dimensions,
   ListRenderItem,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
 } from 'react-native';
 import axios from 'axios';
 import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-  import { useBookMarkId  } from "../context/BookmarkContent";
-
+  
 // Define the interface for an episode
 interface Episode {
   id: number;
@@ -30,21 +27,24 @@ interface Episode {
 }
 
 const Trending: React.FC = () => {
-  // You might want to specify the type for your navigation if needed
   const navigation = useNavigation<NavigationProp<any>>();
-   const { setbookMarkId } = useBookMarkId ();
- 
-  const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
+   
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const flatListRef = useRef<FlatList<Episode>>(null);
-  const [itemWidth, setItemWidth] = useState<number>(Dimensions.get('window').width);
+  const [itemWidth] = useState<number>(Dimensions.get('window').width);
+  
 
+  // Function to fetch data
   const fetchData = async (): Promise<void> => {
+    setLoading(true);
+    
     try {
-      // Provide type for the response data
-      const response = await axios.get<{ results: Episode[] }>('https://kangaroo-kappa.vercel.app/meta/anilist/trending');
+      const response = await axios.get<{ results: Episode[] }>(
+        'https://kangaroo-kappa.vercel.app/meta/anilist/trending'
+      );
+      
       setEpisodes(response.data.results);
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -53,91 +53,70 @@ const Trending: React.FC = () => {
     }
   };
 
+  // Initial data fetch
   useEffect(() => {
     fetchData();
-
-    const subscription = Dimensions.addEventListener('change', () => {
-      const { width, height } = Dimensions.get('window');
-      setItemWidth(width); // You can adjust logic if needed for orientation
-    });
-
-    // Clean up subscription on unmount
-    return () => subscription?.remove();
+    
+    // Clean up
+    return () => {
+      // No cleanup needed
+    };
   }, []);
 
-  const handleAddBookmark = (id: number): void => {
-            setbookMarkId(id)
+  const renderItem: ListRenderItem<Episode> = ({ item }) => {
+    return (
+      <View key={item.id} style={[styles.itemContainer, { width: itemWidth }]}>
+        <View style={styles.imageContainer}>
+          <Image 
+            source={{ uri: item.image }} 
+            style={[styles.image, { width: itemWidth }]}
+            // Add better image loading handling
+            onError={(e) => console.log('Image loading error:', e.nativeEvent.error)}
+          />
+          <LinearGradient
+            colors={['rgba(10, 20, 22, 0.2)', 'rgba(22, 22, 22, 1)']}
+            style={styles.overlayGradient}
+          />
+        </View>
 
-     setIsBookmarked(true); // Mark as bookmarked
-    console.log('Bookmark clicked, selectId:', id);
-  };
-
-  useEffect(() => {
-    if (isBookmarked) {
-      const timer = setTimeout(() => {
-         setIsBookmarked(false); // Hide the message after 2 seconds
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [isBookmarked]);
-
-  const renderItem: ListRenderItem<Episode> = ({ item }) => (
-    <View key={item.id} style={[styles.itemContainer, { width: itemWidth }]}>
-      <View style={styles.imageContainer}>
-        <Image source={{ uri: item.image }} style={[styles.image, { width: itemWidth }]} />
-        <LinearGradient
-          colors={['rgba(10, 20, 22, 0.2)', 'rgba(22, 22, 22, 1)']}
-          style={styles.overlayGradient}
-        />
-      </View>
-
-      <View style={styles.textContainer}>
-        <Text style={[styles.title, { width: itemWidth - 20 }]} numberOfLines={1} ellipsizeMode="tail">
-          {item.title.userPreferred}
-        </Text>
-        <Text style={[styles.description, { width: itemWidth - 20 }]} numberOfLines={4} ellipsizeMode="tail">
-          {item.description}
-        </Text>
-        <View style={[styles.container, { width: itemWidth - 20 }]}>
-          <TouchableOpacity onPress={() => navigation.navigate('Details', { id: item.id })}>
-            <View style={styles.playButtonContainer}>
-              <Ionicons name="play" size={35} color="white" />
-              <Text style={styles.playButtonText}>Watch Now</Text>
-            </View>
-          </TouchableOpacity>
-          <View style={styles.iconContainer}>
-            <TouchableOpacity onPress={() => handleAddBookmark(item.id)}>
-              <Ionicons name="bookmark-outline" size={30} color="#DB202C" />
+        <View style={styles.textContainer}>
+          <Text style={[styles.title, { width: itemWidth - 20 }]} numberOfLines={1} ellipsizeMode="tail">
+            {item.title.userPreferred}
+          </Text>
+          <Text style={[styles.description, { width: itemWidth - 20 }]} numberOfLines={4} ellipsizeMode="tail">
+            {item.description}
+          </Text>
+          <View style={[styles.container, { width: itemWidth - 20 }]}>
+            <TouchableOpacity onPress={() => navigation.navigate('Details', { id: item.id })}>
+              <View style={styles.playButtonContainer}>
+                <Ionicons name="play" size={35} color="white" />
+                <Text style={styles.playButtonText}>Watch Now</Text>
+              </View>
             </TouchableOpacity>
           </View>
         </View>
       </View>
-      
-    </View>
-  );
-
-  const handleNext = (): void => {
-    if (currentIndex < episodes.length - 1) {
-      const newIndex = currentIndex + 1;
-      setCurrentIndex(newIndex);
-      flatListRef.current?.scrollToIndex({ animated: true, index: newIndex });
-    }
-  };
-
-  const handlePrev = (): void => {
-    if (currentIndex > 0) {
-      const newIndex = currentIndex - 1;
-      setCurrentIndex(newIndex);
-      flatListRef.current?.scrollToIndex({ animated: true, index: newIndex });
-    }
+    );
   };
 
   if (loading) {
-    return <ActivityIndicator size="large" color="#0000ff" />;
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#DB202C" />
+      </View>
+    );
   }
 
   if (!episodes.length) {
-    return <Text style={styles.title}>No data available</Text>;
+    return (
+      <View style={styles.noDataContainer}>
+        <Text style={styles.noDataText}>No trending content available</Text>
+        <TouchableOpacity style={styles.refreshNowButton} onPress={fetchData}>
+          <Ionicons name="refresh" size={20} color="white" />
+          <Text style={styles.refreshNowText}>Refresh Now</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -152,7 +131,11 @@ const Trending: React.FC = () => {
         contentContainerStyle={styles.flatListContainer}
         getItemLayout={(_data, index) => ({ length: itemWidth, offset: itemWidth * index, index })}
         initialScrollIndex={currentIndex}
-        pagingEnabled // Snap to one item at a time
+        pagingEnabled
+        onMomentumScrollEnd={(event) => {
+          const newIndex = Math.floor(event.nativeEvent.contentOffset.x / itemWidth);
+          setCurrentIndex(newIndex);
+        }}
       />
     </View>
   );
@@ -161,6 +144,34 @@ const Trending: React.FC = () => {
 const styles = StyleSheet.create({
   carouselContainer: {
     flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  noDataContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  noDataText: {
+    fontSize: 16,
+    color: 'white',
+    marginBottom: 20,
+  },
+  refreshNowButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DB202C',
+    padding: 10,
+    borderRadius: 5,
+  },
+  refreshNowText: {
+    color: 'white',
+    marginLeft: 5,
+    fontWeight: 'bold',
   },
   itemContainer: {
     paddingVertical: 0,
@@ -223,16 +234,6 @@ const styles = StyleSheet.create({
     marginLeft: 5,
     fontWeight: 'bold',
   },
-  iconContainer: {
-    backgroundColor: 'black',
-    borderRadius: 5,
-    padding: 5,
-    borderColor: '#DB202C',
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 10,
-  },
 });
 
-export default Trending;
+export default Trending;  
