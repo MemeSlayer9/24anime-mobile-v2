@@ -103,17 +103,32 @@ const MyPlaylist = () => {
   }, []);
 
   // Fetch the episode details from the API using bookMarkId.
-  const fetchDetail = async () => {
-    try {
-      if (!bookMarkId) return;
-      const response = await axios.get(`https://api.amvstr.me/api/v2/info/${bookMarkId}`);
-      setItem(response.data);
-    } catch (error) {
-      console.error('Failed to fetch episode details:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+// Updated fetchDetail function for the new API
+// Updated fetchDetail function for the new API - title and image only
+const fetchDetail = async () => {
+  try {
+    if (!bookMarkId) return;
+    const response = await axios.get(`https://hakai-api.vercel.app/api/anilist/get-provider/${bookMarkId}`);
+    
+    // Extract only title and image from the API response
+    const apiData = response.data.data;
+    const transformedItem = {
+      id: apiData.anilistId,
+      title: {
+        userPreferred: apiData.title.english || apiData.title.romaji
+      },
+      coverImage: {
+        large: apiData.image
+      }
+    };
+    
+    setItem(transformedItem);
+  } catch (error) {
+    console.error('Failed to fetch episode details:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     if (bookMarkId) {

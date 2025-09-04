@@ -44,6 +44,12 @@ interface VideoRefMethods {
   setPositionAsync: (position: number) => Promise<void>;
 }
 
+interface ServerData {
+  type: string;
+  data_id: string;
+  server_id: string;
+  serverName: string;
+}
 interface Subtitle {
   url: string;
   lang: string;
@@ -104,6 +110,11 @@ const { episodes2, addEpisode, updateEpisode } = useEpisode();
   const [savedPosition, setSavedPosition] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
     const [activeType, setActiveType] = useState(null);
+const [servers, setServers] = useState<ServerData[]>([]);
+const [selectedServer, setSelectedServer] = useState("");
+const [serverPickerVisible, setServerPickerVisible] = useState(false);
+const [noStreamingLink, setNoStreamingLink] = useState(false);
+const [userPrefersDub, setUserPrefersDub] = useState<boolean | null>(null);
 
 
       useKeepAwake();
@@ -211,132 +222,268 @@ const resetControlsTimer = () => {
     return "volume-high-sharp";
   };
 
-const handleSubClick = () => {
-  
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(false);
-  fetchVideoWithDubSetting(false);
-  
-};
-
-const handleDubClick = () => {
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(true);
-  fetchVideoWithDubSetting(true);
-};
-console.log(episodeid);
-const fetchVideoWithDubSetting = async (isDub: boolean): Promise<void> => {
+const fetchVideoWithDubSetting = async (isDub: boolean, serverId?: string): Promise<void> => {
   try {
-    const url = `https://sad-beta.vercel.app/api/stream?id=${episodeid}&server=hd-1&type=${isDub ? 'dub' : 'sub'}`;
-    
-    console.log('fetchVideoWithDubSetting called with isDub:', isDub);
+    // Use the provided serverId or default to "hd-1"
+    const serverParam = serverId || "hd-1";
+    const url = `https://fixed-mu.vercel.app/api/stream?id=${episodeid}&server=${serverParam}&type=${isDub ? 'dub' : 'sub'}`;
+    setNoStreamingLink(false); // Reset the state
+
+    console.log('fetchVideoWithDubSetting called with isDub:', isDub, 'server:', serverParam);
     console.log('Generated URL:', url);
     
     const response = await axios.get(url);
     console.log('API Response:', response.data);
     
     const json = response.data.results?.streamingLink;
-    console.log('Parsed JSON data:', json);
+    const availableServers = response.data.results?.servers || [];
     
+    console.log('Parsed JSON data:', json);
+    console.log('Available servers:', availableServers);
+    
+    // Store servers data FIRST - before checking for streaming link
+    if (availableServers.length > 0) {
+      setServers(availableServers);
+      // Set the selected server to the one we're trying to use
+      setSelectedServer(serverParam);
+    }
+    
+    // Only proceed with video setup if we have a streaming link
     if (!json) {
       console.error('No streaming link found in response');
-      return;
+      setNoStreamingLink(true); // ADD THIS LINE - SET TO TRUE WHEN NO STREAMING LINK
+      // Don't return early - let the function continue to handle other data
+      // But clear video-related states
+      setVideoSource('');
+      setInitialVideoSource('');
+      setSelectedQuality('');
+    } else {
+      setNoStreamingLink(false); // ADD THIS LINE - SET TO FALSE WHEN WE HAVE A STREAMING LINK
+      // Set selected server and video source only if we have a streaming link
+      setSelectedServer(json.server || serverParam);
+      
+      // Set video source
+      if (json.link && json.link.file) {
+        const sourceUrl = json.link.file;
+        console.log('Video source URL:', sourceUrl);
+        setInitialVideoSource(sourceUrl);
+        setVideoSource(sourceUrl);
+        setSelectedQuality(sourceUrl);
+      }
     }
     
-    // Set video source
-    if (json.link && json.link.file) {
-      const sourceUrl = json.link.file;
-      console.log('Video source URL:', sourceUrl);
-      setInitialVideoSource(sourceUrl);
-      setVideoSource(sourceUrl);
-      setSelectedQuality(sourceUrl);
-    }
-    
-    // Handle tracks - FIXED VERSION
-    if (json.tracks && json.tracks.length > 0) {
+    // Handle tracks - IMPROVED VERSION (keep this regardless of streaming link)
+    if (json && json.tracks && Array.isArray(json.tracks) && json.tracks.length > 0) {
       console.log('Available tracks:', json.tracks);
       
-      // Filter out thumbnail tracks and look for subtitle tracks
+      // Filter subtitle tracks more reliably
       const subtitleTracks = json.tracks.filter((track: any) => {
-        const isNotThumbnail = track.kind !== 'thumbnails';
-        const isSubtitleTrack = track.kind === 'captions' || 
-                               track.kind === 'subtitles' || 
-                               (track.file && (track.file.includes('.vtt') || track.file.includes('.srt')));
+        // Check if it's a subtitle track by kind or file extension
+        const isSubtitleByKind = track.kind === 'captions' || track.kind === 'subtitles';
+        const isSubtitleByExtension = track.file && 
+          (track.file.endsWith('.vtt') || 
+           track.file.endsWith('.srt') || 
+           track.file.includes('.vtt') || 
+           track.file.includes('.srt'));
+        const isNotThumbnail = track.kind !== 'thumbnails' && !track.file?.includes('thumbnails');
         
-        console.log(`Track: ${track.file}, kind: ${track.kind}, isSubtitle: ${isNotThumbnail && isSubtitleTrack}`);
-        return isNotThumbnail && isSubtitleTrack;
+        const isSubtitle = (isSubtitleByKind || isSubtitleByExtension) && isNotThumbnail;
+        
+        console.log(`Track analysis:`, {
+          file: track.file,
+          kind: track.kind,
+          label: track.label,
+          isSubtitleByKind,
+          isSubtitleByExtension,
+          isNotThumbnail,
+          finalDecision: isSubtitle
+        });
+        
+        return isSubtitle;
       });
       
       console.log('Filtered subtitle tracks:', subtitleTracks);
       
       if (subtitleTracks.length > 0) {
-        // Map tracks to the expected format
-        const formattedSubtitles = subtitleTracks.map((track: any) => ({
-          url: track.file,
-          lang: track.label || track.language || 'Unknown',
-          kind: track.kind || 'subtitles'
-        }));
+        // Map tracks to the expected format with better language detection
+        const formattedSubtitles = subtitleTracks.map((track: any, index: number) => {
+          let langLabel = track.label || track.language || `Subtitle ${index + 1}`;
+          
+          // Clean up language labels
+          if (langLabel.includes(' - ')) {
+            langLabel = langLabel.split(' - ')[0]; // Take the first part before ' - '
+          }
+          
+          return {
+            url: track.file,
+            lang: langLabel,
+            kind: track.kind || 'subtitles',
+            default: track.default || false
+          };
+        });
         
+        console.log('Formatted subtitles:', formattedSubtitles);
         setSubtitles(formattedSubtitles);
         
-        // Look for English subtitle
-        const englishSubtitle = formattedSubtitles.find((sub: any) =>
-          sub.lang?.toLowerCase().includes("en") || 
-          sub.lang?.toLowerCase().includes("english")
-        );
+        // Priority selection logic
+        let selectedSub = null;
         
-        if (englishSubtitle) {
-          console.log('Selected English subtitle:', englishSubtitle);
-          setSelectedSubtitle(englishSubtitle.lang);
+        // 1. Check for default subtitle
+        selectedSub = formattedSubtitles.find((sub: any) => sub.default === true);
+        
+        // 2. If no default, look for English
+        if (!selectedSub) {
+          selectedSub = formattedSubtitles.find((sub: any) =>
+            sub.lang?.toLowerCase().includes("english") || 
+            sub.lang?.toLowerCase().includes("eng") ||
+            sub.lang?.toLowerCase() === "en"
+          );
+        }
+        
+        // 3. If no English, use first available
+        if (!selectedSub) {
+          selectedSub = formattedSubtitles[0];
+        }
+        
+        if (selectedSub) {
+          console.log('Selected subtitle:', selectedSub);
+          setSelectedSubtitle(selectedSub.lang);
         } else {
-          // Use first available subtitle
-          console.log('No English subtitle found, using first available:', formattedSubtitles[0]);
-          setSelectedSubtitle(formattedSubtitles[0].lang);
+          console.log('No suitable subtitle found, disabling');
+          setSelectedSubtitle("disabled");
         }
       } else {
-        console.log('No subtitle tracks available');
+        console.log('No subtitle tracks available after filtering');
         setSubtitles([]);
         setSelectedSubtitle("disabled");
       }
     } else {
-      console.log('No tracks found in response');
+      console.log('No tracks array found in response or tracks array is empty');
       setSubtitles([]);
       setSelectedSubtitle("disabled");
     }
     
-    // Handle intro/outro segments
-    if (json.intro && (json.intro.start !== 0 || json.intro.end !== 0)) {
-      console.log('Intro segment:', json.intro);
-      setIntroSegment(json.intro);
+    // Handle intro/outro segments with better validation (keep this regardless of streaming link)
+    if (json && json.intro && Array.isArray(json.intro) && json.intro.length >= 2) {
+      const [start, end] = json.intro;
+      if (start !== 0 || end !== 0) {
+        console.log('Intro segment found:', { start, end });
+        setIntroSegment({ start, end });
+      } else {
+        console.log('Intro segment exists but is [0,0], ignoring');
+        setIntroSegment(null);
+      }
     } else {
       setIntroSegment(null);
     }
     
-    if (json.outro && (json.outro.start !== 0 || json.outro.end !== 0)) {
-      console.log('Outro segment:', json.outro);
-      setOutroSegment(json.outro);
+    if (json && json.outro && Array.isArray(json.outro) && json.outro.length >= 2) {
+      const [start, end] = json.outro;
+      if (start !== 0 || end !== 0) {
+        console.log('Outro segment found:', { start, end });
+        setOutroSegment({ start, end });
+      } else {
+        console.log('Outro segment exists but is [0,0], ignoring');
+        setOutroSegment(null);
+      }
     } else {
       setOutroSegment(null);
     }
     
   } catch (error) {
     console.error("Error fetching video data: ", error);
+    setNoStreamingLink(true); // ADD THIS LINE - SET TO TRUE ON ERROR
+    
+    // Enhanced error handling
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status === 404) {
+        console.error("Video not found (404). Check if the episode ID is correct:", episodeid);
+      } else {
+        console.error("API request failed with status:", error.response?.status);
+      }
+    }
+    
     // Set default states on error
     setSubtitles([]);
     setSelectedSubtitle("disabled");
     setIntroSegment(null);
     setOutroSegment(null);
+    setVideoSource('');
+    setInitialVideoSource('');
+    // Don't clear servers on error - keep them if they were previously set
   } finally {
     console.log('Fetch completed, setting loading to false');
     setTimeout(() => setEpisodeLoading(false), 500);
   }
 };
-useEffect(() => {
-  const isDubbed =   currentBackupEpisode?.isDubbed === true;
-  setIsDubMode(isDubbed);
-  fetchVideoWithDubSetting(isDubbed);
-}, [episodeid]);
+ useEffect(() => {
+  // Only run when episodeid changes from episode list selection
+  // (not from previous/next navigation which handles its own logic)
+  if (!episodeid) return;
+  
+  // This will only trigger for direct episode selections, not navigation
+  const timeoutId = setTimeout(() => {
+    const currentEp = filteredBackupEpisodes.find(item => {
+      const formattedId = item.id.replace("$", "?").replace("episode$", "ep=");
+      return formattedId === episodeid;
+    });
+    
+    if (currentEp) {
+      let shouldUseDub = false;
+      
+      if (userPrefersDub !== null) {
+        if (userPrefersDub && currentEp.isDubbed === true) {
+          shouldUseDub = true;
+        } else if (!userPrefersDub && currentEp.isSubbed === true) {
+          shouldUseDub = false;
+        } else {
+          shouldUseDub = currentEp.isDubbed === true && currentEp.isSubbed !== true;
+        }
+      } else {
+        shouldUseDub = currentEp.isDubbed === true && currentEp.isSubbed !== true;
+      }
+      
+      setIsDubMode(shouldUseDub);
+      fetchVideoWithDubSetting(shouldUseDub);
+    }
+  }, 100); // Small delay to ensure filteredBackupEpisodes is updated
+  
+  return () => clearTimeout(timeoutId);
+}, [episodeid]); // Only depend on episodeid
 
+// Modified handleSubClick and handleDubClick functions
+const handleSubClick = () => {
+  setEpisodeLoading(true);
+  setIsDubMode(false);
+  setUserPrefersDub(false); // This saves the user's preference
+  const currentServerName = selectedServer || "hd-1";
+  fetchVideoWithDubSetting(false, currentServerName.toLowerCase());
+};
+
+const handleDubClick = () => {
+  setEpisodeLoading(true);
+  setIsDubMode(true);
+  setUserPrefersDub(true); // This saves the user's preference
+  const currentServerName = selectedServer || "hd-1";
+  fetchVideoWithDubSetting(true, currentServerName.toLowerCase());
+};
+// Function to handle server selection
+const handleServerSelection = (server: any) => {
+  setEpisodeLoading(true);
+  const serverName = server.serverName.toLowerCase();
+  setSelectedServer(server.serverName);
+  setServerPickerVisible(false);
+  
+  // Fetch video with the new server
+  fetchVideoWithDubSetting(isDubMode, serverName);
+};
+useEffect(() => {
+  if (!selectedServer) {
+    setSelectedServer("hd-1");
+  }
+}, []);
+ 
+ 
   useEffect(() => {
     const fetchEpisode = async () => {
       setLoading(true);
@@ -355,13 +502,27 @@ useEffect(() => {
     };
     fetchEpisode();
   }, [animeId]);
-
 useEffect(() => {
   if (initialVideoSource) {
     const fetchQualities = async () => {
       setLoadingQualities(true);
       try {
-        const response = await axios.get(initialVideoSource);
+        // Add proper headers to match the video request
+        const response = await axios.get(initialVideoSource, {
+          headers: {
+            "Referer": "https://megacloud.blog/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site"
+          },
+          timeout: 10000 // 10-second timeout
+        });
+        
         const baseUrl = initialVideoSource.substring(0, initialVideoSource.lastIndexOf("/") + 1);
         
         // Use a map to store unique qualities by resolution height
@@ -372,24 +533,27 @@ useEffect(() => {
             const resolutionMatch = line.match(/RESOLUTION=(\d+x\d+)/);
             if (resolutionMatch) {
               const resolution = resolutionMatch[1];
-              const uri = arr[i + 1]?.startsWith('http') ? arr[i + 1] : `${baseUrl}${arr[i + 1]}`;
-              
-              // Extract the height from the resolution (e.g., "1920x1080" -> "1080")
-              const height = resolution.split('x')[1];
-              if (height) {
-                const label = `${height}p`;
-                // Only add this quality if we haven't seen this height before
-                // or if the bandwidth is higher (better quality for same resolution)
-                const bandwidthMatch = line.match(/BANDWIDTH=(\d+)/);
-                const bandwidth = bandwidthMatch ? parseInt(bandwidthMatch[1]) : 0;
+              const nextLine = arr[i + 1];
+              if (nextLine && nextLine.trim()) {
+                const uri = nextLine.startsWith('http') ? nextLine : `${baseUrl}${nextLine}`;
                 
-                if (!qualityMap.has(height) || 
-                    (bandwidth > (qualityMap.get(height)?.bandwidth || 0))) {
-                  qualityMap.set(height, { 
-                    label, 
-                    uri, 
-                    bandwidth
-                  });
+                // Extract the height from the resolution (e.g., "1920x1080" -> "1080")
+                const height = resolution.split('x')[1];
+                if (height) {
+                  const label = `${height}p`;
+                  // Only add this quality if we haven't seen this height before
+                  // or if the bandwidth is higher (better quality for same resolution)
+                  const bandwidthMatch = line.match(/BANDWIDTH=(\d+)/);
+                  const bandwidth = bandwidthMatch ? parseInt(bandwidthMatch[1]) : 0;
+                  
+                  if (!qualityMap.has(height) || 
+                      (bandwidth > (qualityMap.get(height)?.bandwidth || 0))) {
+                    qualityMap.set(height, { 
+                      label, 
+                      uri, 
+                      bandwidth
+                    });
+                  }
                 }
               }
             }
@@ -413,14 +577,55 @@ useEffect(() => {
         }
         
         setQualities(uniqueQualities);
+        console.log('Successfully fetched qualities:', uniqueQualities.map(q => q.label));
+        
       } catch (error) {
         console.error("Error fetching qualities: ", error);
-        setQualities([{ label: "Auto", uri: initialVideoSource }]);
+        
+        // Enhanced error handling with fallback strategies
+        if (axios.isAxiosError(error)) {
+          if (error.response?.status === 403) {
+            console.log("403 Forbidden - trying alternative approach");
+            
+            // Try a different approach: extract qualities from the URL pattern
+            try {
+              const urlParts = initialVideoSource.split('/');
+              const playlistName = urlParts[urlParts.length - 1];
+              
+              // Common quality patterns in HLS URLs
+              const commonQualities = ['1080p', '720p', '480p', '360p', '240p'];
+              const fallbackQualities = [];
+              
+              for (const quality of commonQualities) {
+                const qualityUrl = initialVideoSource.replace(playlistName, `${quality}.m3u8`);
+                fallbackQualities.push({ label: quality, uri: qualityUrl });
+              }
+              
+              fallbackQualities.unshift({ label: "Auto", uri: initialVideoSource });
+              setQualities(fallbackQualities);
+              console.log('Using fallback quality detection');
+              
+            } catch (fallbackError) {
+              console.error("Fallback quality detection failed:", fallbackError);
+              // Final fallback - just use the original source
+              setQualities([{ label: "Auto", uri: initialVideoSource }]);
+            }
+          } else {
+            // For other errors, just use the original source
+            setQualities([{ label: "Auto", uri: initialVideoSource }]);
+          }
+        } else {
+          // For non-Axios errors, use original source
+          setQualities([{ label: "Auto", uri: initialVideoSource }]);
+        }
       } finally {
         setLoadingQualities(false);
       }
     };
-    fetchQualities();
+    
+    // Add a small delay to ensure the video source is properly set
+    const timer = setTimeout(fetchQualities, 500);
+    return () => clearTimeout(timer);
   }
 }, [initialVideoSource]);
 
@@ -679,11 +884,34 @@ const handlePreviousEpisode = () => {
       const formattedPrevEpisodeId = prevEpisode.id
         .replace("$", "?")
         .replace("episode$", "ep=");
+      
+      // Determine mode for the previous episode
+      let shouldUseDub = false;
+      if (userPrefersDub !== null) {
+        if (userPrefersDub && prevEpisode.isDubbed === true) {
+          shouldUseDub = true;
+        } else if (!userPrefersDub && prevEpisode.isSubbed === true) {
+          shouldUseDub = false;
+        } else {
+          shouldUseDub = prevEpisode.isDubbed === true && prevEpisode.isSubbed !== true;
+        }
+      } else {
+        shouldUseDub = prevEpisode.isDubbed === true && prevEpisode.isSubbed !== true;
+      }
+      
+      setIsDubMode(shouldUseDub);
       setEpisodeid(formattedPrevEpisodeId);
+      fetchVideoWithDubSetting(shouldUseDub);
       navigation.navigate("Zoro");
     }
   }
 };
+
+useEffect(() => {
+  const isDubbed = currentBackupEpisode?.isDubbed === true;
+  setIsDubMode(isDubbed);
+  fetchVideoWithDubSetting(isDubbed);
+}, [episodeid]);
 
 const returnToPortraitMode = async () => {
   if (isFullscreen) {
@@ -710,7 +938,24 @@ const handleNextEpisode = () => {
       const formattedNextEpisodeId = nextEpisode.id
         .replace("$", "?")
         .replace("episode$", "ep=");
+      
+      // Determine mode for the next episode
+      let shouldUseDub = false;
+      if (userPrefersDub !== null) {
+        if (userPrefersDub && nextEpisode.isDubbed === true) {
+          shouldUseDub = true;
+        } else if (!userPrefersDub && nextEpisode.isSubbed === true) {
+          shouldUseDub = false;
+        } else {
+          shouldUseDub = nextEpisode.isDubbed === true && nextEpisode.isSubbed !== true;
+        }
+      } else {
+        shouldUseDub = nextEpisode.isDubbed === true && nextEpisode.isSubbed !== true;
+      }
+      
+      setIsDubMode(shouldUseDub);
       setEpisodeid(formattedNextEpisodeId);
+      fetchVideoWithDubSetting(shouldUseDub);
       navigation.navigate("Zoro");
     }
   }
@@ -799,305 +1044,265 @@ const handleNextEpisode = () => {
   // Return the component JSX
   return (
     <View style={styles.container}>
-      {/* Video Player Container */}
-      <Pressable 
-        onPress={() => setControlsVisible(!controlsVisible)}
-        style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
-      >
-        <VideoWithSubtitles
-  ref={videoRef}
-  source={{ 
-    uri: videoSource,
-    headers: {
-      "Referer": "https://megaplay.buzz/"
-      },
-  }}
-  style={styles.video}
-  resizeMode={ResizeMode.CONTAIN}
-  shouldPlay
-  volume={volume}
-  onLoad={() => {
-    console.log('Video loaded successfully');
-  }}
+ 
+{/* Video Player Container - Only show when streaming link is available */}
+{!noStreamingLink ? (
+  <Pressable 
+    onPress={() => setControlsVisible(!controlsVisible)}
+    style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
+  >
+    
+    <VideoWithSubtitles
+      ref={videoRef}
+      source={{ 
+        uri: videoSource,
+        headers: {
+          "Referer": "https://megacloud.blog/"
+        },
+      }}
+      style={styles.video}
+      resizeMode={ResizeMode.CONTAIN}
+      shouldPlay
+      volume={volume}
+      onLoad={() => {
+        console.log('Video loaded successfully');
+      }}
+      onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+      textTracks={subtitles.map(sub => ({
+        uri: sub.url,
+        language: sub.lang,
+        type: "text/vtt",
+        title: sub.lang,
+      }))}
+      selectedTextTrack={{
+        type: selectedSubtitle === "disabled" ? "disabled" : "title",
+        value: selectedSubtitle,
+      }}
+    />
    
-  onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-  textTracks={subtitles.map(sub => ({
-    uri: sub.url,
-    language: sub.lang,
-    type: "text/vtt",
-    title: sub.lang,
-  }))}
-  selectedTextTrack={{
-    type: selectedSubtitle === "disabled" ? "disabled" : "title",
-    value: selectedSubtitle,
-  }}
-/>
+    {currentSubtitle && (
+      <View style={styles.subtitleContainer}>
+        <Text style={styles.subtitleText}>{currentSubtitle}</Text>
+      </View>
+    )}
       
-        {currentSubtitle && (
-          <View style={styles.subtitleContainer}>
-            <Text style={styles.subtitleText}>{currentSubtitle}</Text>
-          </View>
-        )}
-
-        <TouchableWithoutFeedback onPress={() => !isLocked && setControlsVisible(!controlsVisible)}>
-          <View style={[styles.overlay, isFullscreen && styles.fullscreenOverlay]}>
-            {controlsVisible && (
-              <>
-                <View style={styles.topControls}>
-                   <TouchableOpacity onPress={async () => {
-                   await returnToPortraitMode();
-                   navigation.goBack();
-                 }}>
-                   <Ionicons name="arrow-back" size={24} color="white" />
-                 </TouchableOpacity>
-                   {currentBackupEpisode && (
-                               <Text style={styles.episodeNumberText}>
-                                 Episode {currentBackupEpisode.number}
-                               </Text>
-                             )}
-                  <View style={styles.rightControls}>
-                    <TouchableOpacity onPress={() => setSubtitlesPickerVisible(true)}>
-                      <Ionicons name="text" size={24} color="white" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setPickerVisible(true)}>
-                      <Ionicons name="settings" size={24} color="white" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleToggleFullScreen}>
-                      <Ionicons name={isFullscreen ? "contract" : "expand"} size={24} color="white" />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                
-                <View style={styles.segmentsContainer}>
-                  {introSegment &&
-                    currentTime / 1000 >= introSegment.start &&
-                    currentTime / 1000 < introSegment.end && (
-                      <TouchableOpacity
-                        style={styles.skipButton}
-                        onPress={() => {
-                          // Jump to the end of the intro segment.
-                          videoRef.current?.setPositionAsync(introSegment.end * 1000);
-                        }}
-                      >
-                        <Text style={styles.skipButtonText}>Skip Intro</Text>
-                      </TouchableOpacity>
-                    )}
-                  {outroSegment &&
-                    outroSegment.start !== 0 &&
-                    currentTime / 1000 >= outroSegment.start &&
-                    currentTime / 1000 < outroSegment.end && (
-                      <TouchableOpacity
-                        style={styles.skipButton}
-                        onPress={() => {
-                          // Jump to the end of the outro segment.
-                          videoRef.current?.setPositionAsync(outroSegment.end * 1000);
-                        }}
-                      >
-                        <Text style={styles.skipButtonText}>Skip Outro</Text>
-                      </TouchableOpacity>
-                    )}
-                </View>
-
-                <View style={styles.bottomControls}>
-                  <Slider
-                    style={styles.slider}
-                    minimumValue={0}
-                    maximumValue={duration}
-                    value={sliderValue}
-                    onSlidingStart={() => setIsSliding(true)}
-                    onSlidingComplete={async (value) => {
-                      await videoRef.current?.setPositionAsync(value);
-                      setIsSliding(false);
+    <TouchableWithoutFeedback onPress={() => !isLocked && setControlsVisible(!controlsVisible)}>
+      <View style={[styles.overlay, isFullscreen && styles.fullscreenOverlay]}>
+        {controlsVisible && (
+          <>
+            <View style={styles.topControls}>
+               <TouchableOpacity onPress={async () => {
+               await returnToPortraitMode();
+               navigation.goBack();
+             }}>
+               <Ionicons name="arrow-back" size={24} color="white" />
+             </TouchableOpacity>
+               {currentBackupEpisode && (
+                           <Text style={styles.episodeNumberText}>
+                             Episode {currentBackupEpisode.number}
+                           </Text>
+                         )}
+              <View style={styles.rightControls}>
+                <TouchableOpacity onPress={() => setSubtitlesPickerVisible(true)}>
+                  <Ionicons name="text" size={24} color="white" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setPickerVisible(true)}>
+                  <Ionicons name="settings" size={24} color="white" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={handleToggleFullScreen}>
+                  <Ionicons name={isFullscreen ? "contract" : "expand"} size={24} color="white" />
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            <View style={styles.segmentsContainer}>
+              {introSegment &&
+                currentTime / 1000 >= introSegment.start &&
+                currentTime / 1000 < introSegment.end && (
+                  <TouchableOpacity
+                    style={styles.skipButton}
+                    onPress={() => {
+                      // Jump to the end of the intro segment.
+                      videoRef.current?.setPositionAsync(introSegment.end * 1000);
                     }}
-                    minimumTrackTintColor="#E50914"
-                    maximumTrackTintColor="#404040"
-                    thumbTintColor="#E50914"
-                  />
+                  >
+                    <Text style={styles.skipButtonText}>Skip Intro</Text>
+                  </TouchableOpacity>
+                )}
+              {outroSegment &&
+                outroSegment.start !== 0 &&
+                currentTime / 1000 >= outroSegment.start &&
+                currentTime / 1000 < outroSegment.end && (
+                  <TouchableOpacity
+                    style={styles.skipButton}
+                    onPress={() => {
+                      // Jump to the end of the outro segment.
+                      videoRef.current?.setPositionAsync(outroSegment.end * 1000);
+                    }}
+                  >
+                    <Text style={styles.skipButtonText}>Skip Outro</Text>
+                  </TouchableOpacity>
+                )}
+            </View>
 
-                  <View style={styles.timeControls}>
-                    <Text style={styles.timeText}>{formatTime(currentTime / 1000)}</Text>
-                    <View style={styles.volumeWrapper}>
-                      <TouchableOpacity onPress={() => setShowVolumeSlider(!showVolumeSlider)}>
-                        <Ionicons name={getVolumeIcon(volume)} size={28} color="white" />
-                      </TouchableOpacity>
-                      {showVolumeSlider && (
-                        <Slider
-                          style={styles.volumeSlider}
-                          minimumValue={0}
-                          maximumValue={1}
-                          value={volume}
-                          onValueChange={setVolume}
-                          onSlidingComplete={() => setShowVolumeSlider(false)}
-                          minimumTrackTintColor="red"
-                          maximumTrackTintColor="gray"
-                          thumbTintColor="red"
-                        />
-                      )}
-                    </View>
-                    <View style={styles.centerControls}>
-                       <TouchableOpacity
-      onPress={handlePreviousEpisode}
-      disabled={currentBackupEpisode && currentBackupIndex <= 0}
-      style={[
-        styles.navButton,
-        (currentBackupEpisode && currentBackupIndex <= 0) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-back" size={30} color="white" />
-    </TouchableOpacity>
-                      <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
-                        <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
-                      </TouchableOpacity>
-                    <TouchableOpacity
-      onPress={handleNextEpisode}
-      disabled={currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1}
-      style={[
-        styles.navButton,
-        (currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-forward" size={30} color="white" />
-    </TouchableOpacity>
-                    </View>
-                    <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
-                  </View>
-                </View>
-                     <View style={styles.playIconOverlayRow}>
-                  {isVideoLoading ? (
-                    // Only show spinner while loading
-                    <View style={styles.loadingContainer}>
-                      <ActivityIndicator size="large" color="red" />
-                    </View>
-                  ) : (
-                    // Show rewind, play/pause, and fast-forward once loaded
-                    <>
-                      <TouchableOpacity 
-                        onPress={handleRewind} 
-                        style={styles.rewindOverlay}
-                        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-                      >
-                        <Image 
-                          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_backward-1024.png" }} 
-                          style={styles.rewindIcon} 
-                        />
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity 
-                        onPress={handlePlayPause}
-                        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-                      >
-                        <Ionicons name={paused ? "play" : "pause"} size={50} color="white" />
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity 
-                        onPress={handleFastForward} 
-                        style={styles.fastForwardOverlay}
-                        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-                      >
-                        <Image 
-                          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_forward-1024.png" }} 
-                          style={styles.fastForwardIcon} 
-                        />
-                      </TouchableOpacity>
-                    </>
+            <View style={styles.bottomControls}>
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={duration}
+                value={sliderValue}
+                onSlidingStart={() => setIsSliding(true)}
+                onSlidingComplete={async (value) => {
+                  await videoRef.current?.setPositionAsync(value);
+                  setIsSliding(false);
+                }}
+                minimumTrackTintColor="#E50914"
+                maximumTrackTintColor="#404040"
+                thumbTintColor="#E50914"
+              />
+
+              <View style={styles.timeControls}>
+                <Text style={styles.timeText}>{formatTime(currentTime / 1000)}</Text>
+                <View style={styles.volumeWrapper}>
+                  <TouchableOpacity onPress={() => setShowVolumeSlider(!showVolumeSlider)}>
+                    <Ionicons name={getVolumeIcon(volume)} size={28} color="white" />
+                  </TouchableOpacity>
+                  {showVolumeSlider && (
+                    <Slider
+                      style={styles.volumeSlider}
+                      minimumValue={0}
+                      maximumValue={1}
+                      value={volume}
+                      onValueChange={setVolume}
+                      onSlidingComplete={() => setShowVolumeSlider(false)}
+                      minimumTrackTintColor="red"
+                      maximumTrackTintColor="gray"
+                      thumbTintColor="red"
+                    />
                   )}
                 </View>
-              </>
-            )}
+                <View style={styles.centerControls}>
+                   <TouchableOpacity
+  onPress={handlePreviousEpisode}
+  disabled={currentBackupEpisode && currentBackupIndex <= 0}
+  style={[
+    styles.navButton,
+    (currentBackupEpisode && currentBackupIndex <= 0) && styles.disabledButton,
+  ]}
+>
+  <Ionicons name="chevron-back" size={30} color="white" />
+</TouchableOpacity>
+                  <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
+                    <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
+                  </TouchableOpacity>
+                <TouchableOpacity
+  onPress={handleNextEpisode}
+  disabled={currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1}
+  style={[
+    styles.navButton,
+    (currentBackupEpisode && currentBackupIndex >= filteredBackupEpisodes.length - 1) && styles.disabledButton,
+  ]}
+>
+  <Ionicons name="chevron-forward" size={30} color="white" />
+</TouchableOpacity>
+                </View>
+                <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
+              </View>
+            </View>
+                 <View style={styles.playIconOverlayRow}>
+              {isVideoLoading ? (
+                // Only show spinner while loading
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color="red" />
+                </View>
+              ) : (
+                // Show rewind, play/pause, and fast-forward once loaded
+                <>
+                  <TouchableOpacity 
+                    onPress={handleRewind} 
+                    style={styles.rewindOverlay}
+                    hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                  >
+                    <Image 
+                      source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_backward-1024.png" }} 
+                      style={styles.rewindIcon} 
+                    />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    onPress={handlePlayPause}
+                    hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                  >
+                    <Ionicons name={paused ? "play" : "pause"} size={50} color="white" />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    onPress={handleFastForward} 
+                    style={styles.fastForwardOverlay}
+                    hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                  >
+                    <Image 
+                      source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_forward-1024.png" }} 
+                      style={styles.fastForwardIcon} 
+                    />
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </>
+        )}
+      </View>
+    </TouchableWithoutFeedback>
+  </Pressable>
+) : (
+  // Show no streaming link message when video is not available
+  <View style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}>
+    <View style={styles.noStreamingContainer}>
+      <Text style={styles.noStreamingText}>No streaming link found</Text>
+      <Text style={styles.noStreamingSubtext}>Please choose another server</Text>
+      <TouchableOpacity 
+        style={styles.chooseServerButton}
+        onPress={() => setServerPickerVisible(true)}
+      >
+        <Text style={styles.chooseServerButtonText}>Choose Server</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
 
-          
-          </View>
-        </TouchableWithoutFeedback>
-      </Pressable>
-
-      {/* Quality Picker Modal */}
-    // In the Modal quality picker, modify the quality selection code
-<Modal visible={pickerVisible} transparent animationType="slide">
+{/* Add the Server Picker Modal */}
+<Modal visible={serverPickerVisible} transparent animationType="slide">
   <View style={styles.modalBackdrop}>
     <View style={styles.modalContent}>
-      <Text style={styles.modalTitle}>Select Quality</Text>
-      {loadingQualities ? (
-        <ActivityIndicator size="large" color="#E50914" />
-      ) : (
-        qualities.map((quality) => (
+      <Text style={styles.modalTitle}>Select Server</Text>
+      {servers
+        .filter(server => server.type === (isDubMode ? 'dub' : 'sub'))
+        .map((server) => (
           <TouchableOpacity
-            key={quality.uri}
+            key={server.data_id}
             style={[
               styles.qualityItem,
-              videoSource === quality.uri && styles.selectedQualityItem
+              selectedServer.toLowerCase() === server.serverName.toLowerCase() && styles.selectedQualityItem
             ]}
-            onPress={async () => {
-              // Store current position before changing quality
-              const positionToRestore = currentTime;
-              
-              // Change the video source
-              setVideoSource(quality.uri);
-              setSelectedQuality(quality.uri);
-              setPickerVisible(false);
-              
-              // Need to wait a moment for the video to load before seeking
-              // This setTimeout gives the player time to load the new source
-              setTimeout(async () => {
-                if (videoRef.current && positionToRestore > 0) {
-                  await videoRef.current.setPositionAsync(positionToRestore);
-                }
-              }, 1000); // Wait 1 second before seeking
-            }}
+            onPress={() => handleServerSelection(server)}
           >
             <Text style={[
               styles.qualityText,
-              videoSource === quality.uri && styles.selectedQualityText
+              selectedServer.toLowerCase() === server.serverName.toLowerCase() && styles.selectedQualityText
             ]}>
-              {quality.label}
+              {server.serverName}
             </Text>
           </TouchableOpacity>
-        ))
-      )}
+        ))}
       <TouchableOpacity
         style={styles.closeButton}
-        onPress={() => setPickerVisible(false)}
+        onPress={() => setServerPickerVisible(false)}
       >
         <Text style={styles.closeText}>Close</Text>
       </TouchableOpacity>
     </View>
   </View>
 </Modal>
-
-      {/* Subtitles Picker Modal */}
-      <Modal visible={subtitlesPickerVisible} transparent animationType="slide">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Subtitle</Text>
-            <TouchableOpacity
-              style={styles.qualityItem}
-              onPress={() => {
-                setSelectedSubtitle("disabled");
-                setSubtitlesPickerVisible(false);
-              }}
-            >
-              <Text style={styles.qualityText}>Disabled</Text>
-            </TouchableOpacity>
-            {subtitles.map((sub) => (
-              <TouchableOpacity
-                key={sub.lang}
-                style={styles.qualityItem}
-                onPress={() => {
-                  setSelectedSubtitle(sub.lang);
-                  setSubtitlesPickerVisible(false);
-                }}
-              >
-                <Text style={styles.qualityText}>{sub.lang}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setSubtitlesPickerVisible(false)}
-            >
-              <Text style={styles.closeText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
       
       {/* Only show the episode list and search input when NOT in fullscreen mode */}
       {!isFullscreen && (
@@ -1132,8 +1337,44 @@ const handleNextEpisode = () => {
     </TouchableOpacity>
   </View>
 )}
+ 
+
+  <View style={styles.nextEpisodesHeader}> 
+      <Text style={styles.nextEpisodesText}>Servers </Text>
+
+  <View style={styles.badgeContainer}>
+
+ {servers
+  .filter(server => server.type === (isDubMode ? 'dub' : 'sub'))
+  .map((server) => {
+    // Normalize both strings for comparison (case-insensitive)
+    const isSelected = selectedServer.toLowerCase() === server.serverName.toLowerCase();
+    
+    return (
+      <TouchableOpacity
+        key={server.data_id}
+        style={[
+          styles.serverButton,
+          isSelected && styles.activeServerButton
+        ]}
+        onPress={() => handleServerSelection(server)}
+      >
+        <Text style={[
+          styles.serverButtonText,
+          isSelected && styles.activeServerButtonText
+        ]}>
+          {server.serverName}
+        </Text>
+      </TouchableOpacity>
+    );
+  })
+}
+</View>
+</View>
   <View style={styles.nextEpisodesHeader}>
+
   <Text style={styles.nextEpisodesText}>Episodes</Text>
+   
   
   {item4 && item4.episodes && (
   <View style={styles.badgeContainer}>
@@ -1505,7 +1746,82 @@ const styles = StyleSheet.create({
   selectedQualityText: {
     color: '#E50914', // or whatever style you want for the text of selected items
     fontWeight: 'bold',
-  }
+  },
+   serverButtonsContainer: {
+    alignItems: 'center',
+    marginVertical: 5,
+  },
+  serverLabel: {
+    color: '#fff',
+    fontSize: 14,
+    marginBottom: 5,
+    fontWeight: '500',
+  },
+  serverButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  serverButton: {
+    backgroundColor: 'rgb(36, 34, 53)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    minWidth: 50,
+    alignItems: 'center',
+  },
+  activeServerButton: {
+    backgroundColor: '#E50914',
+    borderColor: '#E50914',
+  },
+  serverButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  activeServerButtonText: {
+    color: '#fff',
+  },
+  // Modified nextEpisodesHeader to accommodate the new layout
+ noStreamingContainer: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -100 }, { translateY: -50 }],
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    padding: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    zIndex: 1000,
+    minWidth: 200,
+  },
+  noStreamingText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  noStreamingSubtext: {
+    color: '#ccc',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  chooseServerButton: {
+    backgroundColor: '#E50914',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 6,
+  },
+  chooseServerButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
 });
 
 export default WatchZoro;

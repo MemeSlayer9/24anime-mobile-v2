@@ -20,13 +20,9 @@ import {
   RootStackParamList,
   Episode,
   Anime2,
-  Anime3,
-  Anime3Episode,
   BackupResponse,
-  AnicrushEpisode,
 } from "../Types/types";
 import { useAnimeId } from "../context/EpisodeContext";
-import { slugMapping } from "../mapping/slugMapping"; // adjust the relative path as needed
 import { zoroSlug } from "../mapping/zoroSlugMapping";
 import { useBookMarkId  } from "../context/BookmarkContent";
 import { Ionicons } from '@expo/vector-icons';
@@ -54,14 +50,13 @@ const Details = () => {
   const [item4, setItem4] = useState<BackupResponse | null>(null);
     const [backupImageUrl, setBackupImageUrl] = useState<string>("");
   const [HianimeId, setHianimeId] = useState<string>("");
-  const [slug, setSlug] = useState<string>("");
-  const [anicrushEpisodes, setAnicrushEpisodes] = useState<Episode[]>([]);
   const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
   const [notificationOpacity] = useState(new Animated.Value(0)); // Add this for animation
    const [notificationMessage, setNotificationMessage] = useState('Added to My Playlist');
   const [notificationIconName, setNotificationIconName] = useState<IoniconsName>('checkmark-circle');
   const [notificationIconColor, setNotificationIconColor] = useState('#4CD964');
-  
+  const [providerData, setProviderData] = useState<ProviderData | null>(null);
+
   const [anime, setAnime] = useState<Anime | null>(null);
   const [anime2, setAnime2] = useState<Anime2 | null>(null);
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -73,21 +68,28 @@ const toggleExpanded = () => setIsExpanded(prev => !prev);
   const [activeTab, setActiveTab] = useState('description'); // Default tab
 const [mappedZoroId, setMappedZoroId] = useState("");
 
-  // New state to store additional details fetched using the slug URL
-  const [slugDetails, setSlugDetails] = useState<Anime3 | null>(null);
-
     const months = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-   // Helper function to generate slug from text
-  const slugify = (text: string): string => {
-    return text
-      .toLowerCase()
-      .replace(/[’']/g, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
+interface ProviderData {
+  data: {
+    title: {
+      romaji: string;
+    };
+    image: string;
+    score: number;
+    status: string;
+    season: string;
+    genres: string[];
+    synopsis: string;
   };
+  provider: {
+    id: string;
+    name: string;
+    provider: string;
+  };
+}
 const tabs = [
   { key: "description", label: "Description" },
   { key: "relations",    label: "Relations" },
@@ -123,33 +125,49 @@ const tabs = [
   };
 
   // Fetch provider details from a backup API
-  const fetchProvider = async () => {
-    try {
-      const response = await axios.get(`https://api.amvstr.me/api/v2/info/${id}`);
+const fetchProvider = async () => {
+  try {
+    const response = await axios.get(`https://hakai-api.vercel.app/api/anilist/get-provider/${id}`);
 
-      const modifiedAnime = {
-        ...response.data,
-        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
-      };
-      setAnime2(modifiedAnime);
- setAnime2(response.data);
-      if (response.data?.id_provider) {
-        const { idZoro } = response.data.id_provider;
-        setZoroId(idZoro);
-      }
+    // Store the full response data including the provider data with synopsis
+    setProviderData(response.data);
 
-      if (response.data?.dub !== undefined) {
-        const { dub } = response.data;
-        setDub(dub);
-      }
+    // Extract the provider data from the response
+    const providerData = response.data?.provider;
 
-      setError(null);
-    } catch (error) {
-      console.error("Backup API also failed", error);
-      setError("Failed to fetch data from both APIs");
+    if (providerData?.id) {
+      // Use the provider id as the zoroId
+      setZoroId(providerData.id);
+      console.log(`Provider ID found: ${providerData.id} for anime ${id}`);
+    } else {
+      // If no provider id is found, use the main id as fallback
+      console.log(`No provider ID found for ${id}, using main id as fallback`);
+      setZoroId(id.toString());
     }
-  };
 
+    // You can also store other provider information if needed
+    if (providerData?.name) {
+      console.log(`Provider name: ${providerData.name}`);
+    }
+
+    if (providerData?.provider) {
+      console.log(`Provider type: ${providerData.provider}`);
+    }
+
+    setError(null);
+  } catch (error) {
+    console.error("Provider API failed", error);
+    // Fallback to using the main id if API fails
+    setZoroId(id.toString());
+    setError("Failed to fetch provider data, using fallback");
+  }
+};
+
+// Function to clean HTML tags from synopsis
+const stripHtmlTags = (html: string | null | undefined): string => {
+  if (!html) return '';
+  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+};
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -172,29 +190,6 @@ const tabs = [
     fetchData();
   }, [id, provider]);
 
- 
-       const fetchAnicrushData = async () => {
-      try {
-        const response = await fetch(`https://anicrush-api-eight.vercel.app/api/mapper/${id}`);
-        const data = await response.json();
-        
-        if (data && data.episodes) {
-          setAnicrushEpisodes(data.episodes);
-        } else {
-          setError('No episodes found');
-        }
-      } catch (err) {
-        setError('Failed to fetch episodes: ');
-      } finally {
-        setLoading(false);
-      }
-    };
-      useEffect(() => {
-    if (provider === "anicrush" && id) {
-   fetchAnicrushData();
-    }
-  }, [id, provider]);
-
 const fetchBackupImage = async () => {
   try {
     // Check if there's a mapping for this zoroId
@@ -214,8 +209,9 @@ const fetchBackupImage = async () => {
     setLoading(false);
   }
 };
+
 const handleAddBookmark = async (id?: number): Promise<void> => {
-  if (id == null) return; // guard against undefined
+  if (id == null || !user) return; // guard against undefined id and null user
   
   // Check if already bookmarked
   if (isBookmarked) {
@@ -233,7 +229,8 @@ const handleAddBookmark = async (id?: number): Promise<void> => {
       }
       
       setIsBookmarked(false);
-       setNotificationIconName('close-circle');
+      setNotificationMessage('Removed from My Playlist');
+      setNotificationIconName('close-circle');
       setNotificationIconColor('#FF3B30'); // Red color for removal
     } catch (error) {
       console.error('Error removing bookmark:', error);
@@ -262,7 +259,6 @@ const handleAddBookmark = async (id?: number): Promise<void> => {
     })
   ]).start();
 };
-
 
 useEffect(() => {
   const checkIfBookmarked = async () => {
@@ -326,33 +322,6 @@ useEffect(() => {
   }
 }, [mappedZoroId]);
 
-  // Fetch additional details using a slug (only needed for Animemaster/Animemasterdub)
-   useEffect(() => {
-    if (anime?.title?.english) {
-      const baseSlug = slugify(anime.title.english);
-      let newSlug: string;
-
-      if (provider === "animemasterdub" && dub && dub !== "false") {
-        newSlug = slugMapping[`${baseSlug}-dub`] || `${baseSlug}-dub`;
-      } else {
-        newSlug = slugMapping[baseSlug] || baseSlug;
-      }
-
-      // 2. Store it in state
-      setSlug(newSlug);
-      console.log("Fetching details for slug:", newSlug);
-
-      axios
-        .get(`https://animemaster-one.vercel.app/details/${newSlug}`)
-        .then((res) => setSlugDetails(res.data))
-        .catch((err) =>
-          console.error("Error fetching details with slug:", err)
-        );
-        console.log(`https://animemaster-one.vercel.app/details/${newSlug}`);
-    }
-  }, [anime, provider, dub]);
-
- 
   if (loading) {
     return (
       <View style={styles.container}>
@@ -374,24 +343,7 @@ useEffect(() => {
     );
   }
 
-  // Filter master episodes for Animemaster/Animemasterdub provider and sort them in ascending order.
-  const filteredMasterEpisodes =
-    slugDetails?.episodes && Array.isArray(slugDetails.episodes)
-      ? slugDetails.episodes
-          .filter((episode) => {
-            if (!searchQuery) return true;
-            return episode.episodeText
-              .toLowerCase()
-              .includes(searchQuery.toLowerCase());
-          })
-          .sort((a, b) => {
-            const numA = parseInt(a.episodeText.replace(/[^0-9]/g, ""), 10);
-            const numB = parseInt(b.episodeText.replace(/[^0-9]/g, ""), 10);
-            return numA - numB;
-          })
-      : [];
-
-  // Filter zoro/backup episodes for non-Animemaster providers
+  // Filter episodes
   const filteredEpisodes = episodes
     .filter((episode) => {
       if (!searchQuery) return true;
@@ -408,15 +360,6 @@ useEffect(() => {
           })
           .sort((a, b) => Number(a.number) - Number(b.number))
       : [];
-
-        const filteredAnicrushEpisodes = Array.isArray(anicrushEpisodes) 
-    ? anicrushEpisodes
-        .filter((episode) => {
-          if (!searchQuery) return true;
-          return episode.number?.toString().includes(searchQuery);
-        })
-        .sort((a, b) => Number(a.number || 0) - Number(b.number || 0))
-    : [];
 
   const renderEpisodeItem = ({ item }: { item: Episode }) => {
     return (
@@ -479,87 +422,12 @@ useEffect(() => {
     );
   };
 
-  const renderMasterEpisodes = ({ item }: { item: Anime3Episode }) => {
-    return (
-      <TouchableOpacity
-        style={styles.episodeContainer}
-        onPress={() => {
-          const formattedEpisodeId = item.episodeId;
-          setEpisodeid(formattedEpisodeId);
-          setAnimeId(slug);
-          navigation.navigate("Animemaster");
-        }}
-      >
-        <Image
-          source={{
-            uri:
-              slugDetails?.headBackground ||
-              "https://via.placeholder.com/150",
-          }}
-          style={styles.episodeThumbnail}
-        />
-        <View style={styles.episodeTextContainer}>
-          <Text style={styles.episodeTitle}>Episode {item.episodeText}</Text>
- 
-        </View>
-      </TouchableOpacity>
-    );
-  };
-
-const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
-  <TouchableOpacity 
-    style={styles.episodeContainer}
-    onPress={() => {
-      // Convert item.id to string if it exists
-      if (item.id !== undefined && item.id !== null) {
-        setEpisodeid(String(item.id)); // Convert to string to ensure compatibility
-      }
-      
-      // Ensure id is a string before setting
-      if (id !== undefined && id !== null) {
-        setAnimeId(String(id)); // Convert to string to ensure it matches expected type
-      }
-      
-      // Make sure "Anicrush" is in your RootStackParamList
-      navigation.navigate("Anicrush" as any); // Remove 'as any' after updating types
-    }}
-  >
-    {item.image ? (
-      <Image
-        source={{ uri: item.image }}
-        style={styles.episodeThumbnail}
-        resizeMode="cover"
-      />
-    ) : null}
-    
-    <View style={styles.episodeTextContainer}>
-      <Text style={styles.episodeTitle} numberOfLines={1}>
-        {item.name_english} {item.name ? `(${item.name})` : ''}
-      </Text>
-      <Text style={styles.episodeTitle}>Episode {item.number}</Text>
-
-      <Text style={styles.episodeMeta}>
-        Aired: {item.airDate} • {item.runtime} min
-      </Text>
-    </View>
-  </TouchableOpacity>
-);
-
-  // Define base provider options
-  const baseProviders = [
+  // Define provider options (removed anicrush)
+  const providerOptions = [
     { label: "Animepahe", value: "animepahe" },
     { label: "Zoro", value: "zoro" },
     { label: "Animekai", value: "animekai" },
-    { label: "Animemaster", value: "animemaster" },
-        { label: "Anicrush", value: "anicrush" },
-
   ];
-
-  // Conditionally add Animemasterdub if dub is truthy
-  const providerOptions =
-    dub && dub !== "false"
-      ? [...baseProviders, { label: "Animemasterdub", value: "animemasterdub" }]
-      : baseProviders;
 
   return (
     <ScrollView style={styles.container}>
@@ -573,7 +441,7 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
       >
         <View style={styles.imageContainer}>
           <Image
-            source={{ uri: anime?.image || anime2?.coverImage?.large }}
+            source={{ uri: anime?.image || anime2?.coverImage?.large  || providerData?.data?.image}}
             style={styles.image}
           />
           <LinearGradient
@@ -583,18 +451,18 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
         </View>
         <View style={styles.textContainer}>
           <Text style={styles.title}>
-            {anime?.title?.romaji || anime2?.title?.romaji}
+            {anime?.title?.romaji || providerData?.data?.title?.romaji}
           </Text>
                              <View style={styles.metadata}>
-               <Text style={styles.metadataText}>Rating: {anime?.rating || anime2?.score?.averageScore}%</Text>
-                  <Text style={styles.metadataText}>Status: {anime?.status}</Text>
-                <Text style={styles.metadataText}>Season: {anime?.season}</Text>
+               <Text style={styles.metadataText}>Rating: {anime?.rating || providerData?.data?.score}%</Text>
+                  <Text style={styles.metadataText}>Status: {anime?.status || providerData?.data?.status}</Text>
+                <Text style={styles.metadataText}>Season: {anime?.season || providerData?.data?.season}</Text>
                  
 
         </View>
             <View style={styles.metadata}>
 
-                    <Text style={styles.metadataText}>{anime?.genres.join(", ")}</Text>
+                    <Text style={styles.metadataText}>{anime?.genres.join(", ") || providerData?.data?.genres.join(", ")}</Text>
                     </View>
                                                <View style={styles.metadata}>
 
@@ -703,7 +571,6 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
   })}
 </ScrollView>
 
-{/* Description Tab Content */}
 {activeTab === 'description' && (
   <View style={styles.descriptionContainer}>
     <Text
@@ -711,7 +578,11 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
       numberOfLines={isExpanded ? undefined : 4}
       ellipsizeMode="tail"
     >
-      {anime?.description || anime2?.description}
+      {/* First try to get synopsis from provider data, then fallback to description */}
+      {stripHtmlTags(providerData?.data?.synopsis) || 
+       anime?.description || 
+       anime2?.description || 
+       'No description available'}
     </Text>
     <TouchableOpacity onPress={toggleExpanded}>
       <Text style={styles.readMore}>
@@ -833,35 +704,8 @@ const renderAnicrushEpisodeItem = ({ item }: { item: AnicrushEpisode }) => (
   />
 )}
 
-{/* For Animemaster and Animemasterdub providers */}
-{(provider === "animemaster" || provider === "animemasterdub") &&
-  slugDetails?.episodes &&
-  Array.isArray(slugDetails.episodes) && (
-    <FlatList
-      data={filteredMasterEpisodes}
-      renderItem={renderMasterEpisodes}
-      keyExtractor={(item) => item.episodeId}
-      scrollEnabled={false}
-      contentContainerStyle={styles.episodesList}
-    />
-)}
-
-{/* For Anicrush provider */}
-{provider === "anicrush" && (
-  <FlatList
-    data={filteredAnicrushEpisodes}
-    renderItem={renderAnicrushEpisodeItem}
-    keyExtractor={(item) => item.id?.toString() || `episode-${item.number}`}
-    scrollEnabled={false}
-    contentContainerStyle={styles.episodesList}
-  />
-)}
-
 {/* For other providers (animepahe, animekai) */}
-{provider !== "zoro" && 
- provider !== "animemaster" && 
- provider !== "animemasterdub" && 
- provider !== "anicrush" && (
+{provider !== "zoro" && (
   filteredEpisodes.length > 0 ? (
     <FlatList
       data={filteredEpisodes}

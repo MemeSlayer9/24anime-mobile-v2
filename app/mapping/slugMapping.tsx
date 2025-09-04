@@ -6,6 +6,6 @@ export const slugMapping: { [key: string]: string } = {
    "one-piece" : "one-piece-sub.81393",
   "one-piece-dub" : "one-piece-dub.75785",
   "can-a-boy-girl-friendship-survive" : "danjo-no-yuujou-wa-seiritsu-suru-iya-shinai",
- };
+  };
 
  
