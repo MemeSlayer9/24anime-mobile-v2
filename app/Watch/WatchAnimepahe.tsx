@@ -1,1310 +1,1354 @@
-import React, { useRef, useState, useEffect } from "react";
-import {
-  View,
-  TouchableOpacity,
-  TouchableWithoutFeedback,
-  StyleSheet,
-  Dimensions,
-  Text,
-  Modal,
-  ActivityIndicator,
-  Pressable,
-  StatusBar,
-  FlatList,
-  Image,
-  TextInput,
-  BackHandler,
-  Linking,
-  ToastAndroid
-} from "react-native";
-import { Video, ResizeMode } from "expo-av";
-import { Ionicons } from "@expo/vector-icons";
-import Slider from "@react-native-community/slider";
-import * as ScreenOrientation from "expo-screen-orientation";
-import { useNavigation } from "@react-navigation/native";
-import * as NavigationBar from "expo-navigation-bar";
+import React, { useState, useRef, useEffect } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, StatusBar, Alert, ActivityIndicator, Pressable, FlatList, Image, ScrollView, TextInput, Modal } from 'react-native';
+import { WebView } from 'react-native-webview';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { MaterialIcons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import axios from "axios";
 import { useRoute, RouteProp } from "@react-navigation/native";
 import { Anime, RootStackParamList, Episode, BackupResponse } from "../Types/types";
-import { useAnimeId } from "../context/EpisodeContext"; // adjust path as needed
-import { useEpisode } from "../context/EpisodeHistoryProvider";  // adjust path as needed :contentReference[oaicite:0]{index=0}&#8203;:contentReference[oaicite:1]{index=1}
-import AsyncStorage from '@react-native-async-storage/async-storage'; // Make sure AsyncStorage is installed
+import { Ionicons } from "@expo/vector-icons";
+
+import { useAnimeId } from "../context/EpisodeContext";
+import * as NavigationBar from "expo-navigation-bar";
+import { useNavigation } from "@react-navigation/native";
 import { StackNavigationProp } from "@react-navigation/stack";
-import { useKeepAwake } from "expo-keep-awake";
-
-const { height, width } = Dimensions.get("window");
-interface VideoRefMethods {
-  playAsync: () => Promise<void>;
-  pauseAsync: () => Promise<void>;
-  unloadAsync: () => Promise<void>;
-  loadAsync: (
-    source: { uri: string },
-    initialStatus?: object,
-    downloadFirst?: boolean
-  ) => Promise<void>;
-  setPositionAsync: (position: number) => Promise<void>;
-    getStatusAsync: () => Promise<{ positionMillis: number, isLoaded: boolean, durationMillis?: number }>;
-
-}
-
-interface Subtitle {
-  url: string;
-  kind: string;
-}
-
-interface Segment {
-  start: number;
-  end: number;
-}
 
 interface VideoSource {
   url: string;
-  isM3U8: boolean;
+  isM3u8: boolean;
   quality: string;
-  isDub: boolean;
+  type?: string;
+  isDub?: boolean;
 }
-interface DownloadOption {
-  quality: string;
-  url: string;
-}
- 
-type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Animepahe">;
-const VideoWithSubtitles = Video as any;
 
-const WatchZoro = () => {
-  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
-  const videoRef = useRef<VideoRefMethods | null>(null);
-  const route = useRoute<VideoPlayerRouteProp>();
+interface WebViewMessage {
+  type: 'status' | 'buffering' | 'ready' | 'error' | 'tap' | 'autoplay_blocked';
+  currentTime?: number;
+  duration?: number;
+  paused?: boolean;
+  buffering?: boolean;
+  isBuffering?: boolean;
+  message?: string;
+}
+
+interface WebViewCommand {
+  type: 'seek' | 'play' | 'pause' | 'seekForward' | 'seekBackward' | 'setQuality' | 'reload';
+  time?: number;
+  seconds?: number;
+  level?: number;
+  savedTime?: number;
+}
+
+type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Animepahe">;
+
+export default function ImprovedHLSWebViewPlayer() {
+  const webViewRef = useRef<WebView>(null);
   const { episodeid, animeId, setAnimeId, setEpisodeid } = useAnimeId();
- const { episodes2, addEpisode, updateEpisode } = useEpisode();
-   const [searchQuery, setSearchQuery] = useState<string>("");
-   const [episodeLoading, setEpisodeLoading] = useState(false);
- 
-  const [initialVideoSource, setInitialVideoSource] = useState("");
-  const [videoSource, setVideoSource] = useState("");
-  const [paused, setPaused] = useState(false);
-  const [sliderValue, setSliderValue] = useState(0);
-  const [isSliding, setIsSliding] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [qualities, setQualities] = useState<Array<{ label: string; uri: string }>>([]);
-  const [selectedQuality, setSelectedQuality] = useState("");
-  const [pickerVisible, setPickerVisible] = useState(false);
-  const [loadingQualities, setLoadingQualities] = useState(false);
-  const [volume, setVolume] = useState(1);
-  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isLocked, setIsLocked] = useState(false);
-  const [showPlayIcon, setShowPlayIcon] = useState(false);
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
-    const [isVideoLoading, setIsVideoLoading] = useState(true);
-  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [isReady, setIsReady] = useState(false);
+  const [sources, setSources] = useState<VideoSource[]>([]);
+  const [selectedQuality, setSelectedQuality] = useState("");
+  const [videoSource, setVideoSource] = useState("");
+  const [pickerVisible, setPickerVisible] = useState(false);
+  
+  // New state for dub/sub
+  const [selectedVersion, setSelectedVersion] = useState<'sub' | 'dub'>('sub');
+  const [availableVersions, setAvailableVersions] = useState<('sub' | 'dub')[]>(['sub']);
+  
+  // Episodes state
   const [anime, setAnime] = useState<Anime | null>(null);
-  const [isOn, setIsOn] = useState(false);
-const [savedPosition, setSavedPosition] = useState<number | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [downloadOptions, setDownloadOptions] = useState<DownloadOption[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
- 
-  const [selectedSubtitle, setSelectedSubtitle] = useState("disabled");
-  const [subtitlesPickerVisible, setSubtitlesPickerVisible] = useState(false);
-  const [parsedSubtitles, setParsedSubtitles] = useState<
-    Array<{ start: number; end: number; text: string }>
-  >([]);
-  const [currentSubtitle, setCurrentSubtitle] = useState("");
-  const [introSegment, setIntroSegment] = useState<Segment | null>(null);
-  const [outroSegment, setOutroSegment] = useState<Segment | null>(null);
-const [videoError, setVideoError] = useState(false);
-const [dub, setDub] = useState<boolean | string | null>(null);
-   const [error, setError] = useState<string | null>(null);
- const [isDubMode, setIsDubMode] = useState(false);
- const [sources, setSources] = useState<VideoSource[]>([]);
- 
-
-       useKeepAwake();
- 
-  const formatTime = (time: number) => {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes < 10 ? "0" : ""}${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
-  };
-
-  const getVolumeIcon = (vol: number) => {
-    if (vol === 0) return "volume-mute-sharp";
-    if (vol > 0 && vol <= 0.33) return "volume-low-sharp";
-    if (vol > 0.33 && vol <= 0.66) return "volume-medium-sharp";
-    return "volume-high-sharp";
-  };
-
-   const toggleSwitch = () => {
-    setIsOn(previous => !previous);
-  };
-
-    useEffect(() => {
-  const loadSaved = async () => {
-    if (!episodeid) return;
-    try {
-      const json = await AsyncStorage.getItem(`playbackPosition_${episodeid}`);
-      if (json !== null) {
-        setSavedPosition(JSON.parse(json));
-      }
-    } catch (e) {
-      console.warn("⚠️ failed to load saved position:", e);
-    }
-  };
-  loadSaved();
-}, [episodeid]);
-const savePlaybackPosition = async (positionMillis: number): Promise<void> => {
-  try {
-    if (!episodeid) return;
-    const key = `playbackPosition_${episodeid}`;
-    await AsyncStorage.setItem(key, JSON.stringify(positionMillis));
-    
-    // — convert to seconds —
-    const savedSec = Math.floor(positionMillis / 1000);
-    const durSec = Math.floor(duration / 1000);
-    
-    // — check if we already have this episode in context —
-    const existing = episodes2.find(ep => ep.episode_id === episodeid);
-    
-    // Create episode title with episode number
-    const episodeNumber = currentEpisode?.number;
-    const episodeTitle = `${anime?.title?.romaji || ""} Episode ${episodeNumber !== null ? episodeNumber : ''}`;
-    
-    // Current timestamp for created_at
-    const currentTimestamp = new Date().toISOString();
-    
-    // Get the image from currentEpisode
-    const imageUrl = currentEpisode?.image ||   'https://via.placeholder.com/40';
-    
-    if (existing) {
-      // update just the saved position & duration
-      updateEpisode(existing.id, {
-        saved_position: savedSec,
-        duration: durSec,
-        title: episodeTitle, // Updated title with episode number
-      });
-    } else {
-      
-      // add a fresh record
-      addEpisode({
-        id: Date.now(),
-        episode_id: episodeid,
-        title: episodeTitle,
-        series_id: String(animeId), // Convert animeId to string
-        image_url: imageUrl, // Using the episode image instead of anime image
-        created_at: currentTimestamp,
-        duration: durSec,
-        saved_position: savedSec,
-        provider: "animepahe",
-
-        
-      });
-
-     }
-  } catch (error) {
-    console.error('Failed to save the playback position:', error);
-  }
-};
-const handlePlaybackStatusUpdate = async (status: any) => {
-  if (!status.isLoaded) return;
-
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [episodeLoading, setEpisodeLoading] = useState(false);
   
-  // — restore position once —
-  if (savedPosition !== null && status.positionMillis === 0) {
-    try {
-      await videoRef.current?.setPositionAsync(savedPosition);
-    } catch (e) {
-      console.warn("⚠️ failed to restore position:", e);
-    }
-    setSavedPosition(null);
-  }
+  const controlsTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const bufferingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
+  const [filteredEpisodes, setFilteredEpisodes] = useState<Episode[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-  // — your existing UI/state logic —
-  if (episodeLoading) setEpisodeLoading(false);
-  if (!isSliding)  setSliderValue(status.positionMillis);
-  if (isVideoLoading) setIsVideoLoading(false);
-  setCurrentTime(status.positionMillis);
-  setDuration(status.durationMillis || 0);
-
-  if (selectedSubtitle !== "disabled") {
-    const currentSec = status.positionMillis / 1000;
-    const cue = parsedSubtitles.find(
-      (c) => currentSec >= c.start && currentSec < c.end
-    );
-    setCurrentSubtitle(cue?.text || "");
-  }
-
-  // — save on pause or finish —
-  if (!status.isPlaying && status.positionMillis > 0) {
-    savePlaybackPosition(status.positionMillis);
-  }
-
-  // — auto‑next episode —
-  if (status.didJustFinish && isOn) {
-    handleNextEpisode();
-  }
-};
-
-const handleSubClick = () => {
-  
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(false);
-   
-};
-
-const handleDubClick = () => {
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(true);
-  };
-
-useEffect(() => {
-  const fetchProvider = async () => {
-    try {
-      const response = await axios.get(`https://api.amvstr.me/api/v2/info/${animeId}`);
-      
-      if (response.data?.dub !== undefined) {
-        setDub(response.data.dub);
-      }
-      
-      setError(null);
-    } catch (error) {
-      console.error("Backup API also failed", error);
-      setError("Failed to fetch data from both APIs");
-    }
-  };
-  
-  if (animeId) {
-    fetchProvider();
-  }
-}, [animeId]);
- 
- const fetchDownloadLinks = async () => {
-    if (!episodeid) return;
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const response = await axios.get(`https://anime-mapper.vercel.app/animepahe/sources/${episodeid}`);
-      if (response.data && response.data.download && Array.isArray(response.data.download)) {
-        setDownloadOptions(response.data.download);
-      } else {
-        setError('No download options available');
-      }
-    } catch (err) {
-      console.error('Error fetching download links:', err);
-      setError('Failed to fetch download links');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-const handleDownload = async (url: string) => {
-    try {
-      const supported = await Linking.canOpenURL(url);
-      
-      if (supported) {
-        await Linking.openURL(url);
-      } else {
-        ToastAndroid.show('Cannot open this URL', ToastAndroid.SHORT);
-      }
-    } catch (error) {
-      console.error('Error opening download link:', error);
-      ToastAndroid.show('Error opening download link', ToastAndroid.SHORT);
-    }
-    
-    setModalVisible(false);
-  };
-
-  useEffect(() => {
-    if (modalVisible) {
-      fetchDownloadLinks();
-    }
-  }, [modalVisible, episodeid]);
-
-
-  const fetchVideoData = async () => {
-    try {
-      const response = await axios.get(`https://kangaroo-kappa.vercel.app/anime/animepahe/watch?episodeId=${episodeid}`);
-      const json = response.data;
-      
-      if (json.sources && json.sources.length > 0) {
-        // Store all sources with original URLs
-        setSources(json.sources);
-        
-        // Find the 1080p BD non-dubbed source as default
-        const defaultSource = json.sources.find(
-          (source: VideoSource) => source.isM3U8 === true &&
-                  source.quality === "EMBER · 1080p BD" &&
-                  source.isDub === false
-        );
-        
-        // If the preferred source exists, use it; otherwise fall back to the first source
-        const sourceUrl = defaultSource ? defaultSource.url : json.sources[0].url;
-        setInitialVideoSource(sourceUrl);
-        setVideoSource(sourceUrl);
-        setSelectedQuality(defaultSource ? defaultSource.quality : json.sources[0].quality);
-      }
-    } catch (error) {
-      console.error("Error fetching video data: ", error);
-    }
-  };
-  
- 
-
-  
-   useEffect(() => {
-  setTimeout(() => setEpisodeLoading(false), 500);
-  fetchVideoData();
-  
-}, [episodeid, isDubMode]);
-
- 
-useEffect(() => {
-  const backAction = () => {
-    if (isFullscreen) {
-      handleToggleFullScreen();
-      return true; // Prevents default back behavior
-    }
-    return false; // Allows default back behavior
-  };
-
-  const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
-  return () => backHandler.remove();
-}, [isFullscreen]);
-useEffect(() => {
-  return () => {
-    // This will run when component unmounts
-    if (isFullscreen) {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-      NavigationBar.setVisibilityAsync("visible");
-      if (navigation.getParent()) {
-        navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-      }
-      StatusBar.setHidden(false);
-    }
-  };
-}, [isFullscreen, navigation]);
-
-useEffect(() => {
-  if (initialVideoSource) {
-    const fetchQualities = async () => {
-      setLoadingQualities(true);
-      try {
-        const response = await axios.get(initialVideoSource);
-        const baseUrl = initialVideoSource.substring(0, initialVideoSource.lastIndexOf("/") + 1);
-        
-        // Use a map to store unique qualities by resolution height
-        const qualityMap = new Map<string, { label: string; uri: string; bandwidth?: number }>();
-        
-        response.data.split('\n').forEach((line: string, i: number, arr: string[]) => {
-          if (line.includes('RESOLUTION=')) {
-            const resolutionMatch = line.match(/RESOLUTION=(\d+x\d+)/);
-            if (resolutionMatch) {
-              const resolution = resolutionMatch[1];
-              const uri = arr[i + 1]?.startsWith('http') ? arr[i + 1] : `${baseUrl}${arr[i + 1]}`;
-              
-              // Extract the height from the resolution (e.g., "1920x1080" -> "1080")
-              const height = resolution.split('x')[1];
-              if (height) {
-                const label = `${height}p`;
-                // Only add this quality if we haven't seen this height before
-                // or if the bandwidth is higher (better quality for same resolution)
-                const bandwidthMatch = line.match(/BANDWIDTH=(\d+)/);
-                const bandwidth = bandwidthMatch ? parseInt(bandwidthMatch[1]) : 0;
-                
-                if (!qualityMap.has(height) || 
-                    (bandwidth > (qualityMap.get(height)?.bandwidth || 0))) {
-                  qualityMap.set(height, { 
-                    label, 
-                    uri, 
-                    bandwidth
-                  });
-                }
-              }
-            }
-          }
-        });
-        
-        // Convert the map to an array and sort by height (highest first)
-        let uniqueQualities = Array.from(qualityMap.values())
-          .map(({ label, uri }) => ({ label, uri }))
-          .sort((a, b) => {
-            const heightA = parseInt(a.label.replace('p', ''));
-            const heightB = parseInt(b.label.replace('p', ''));
-            return heightB - heightA;
-          });
-        
-        // Add Auto quality at the top
-        if (uniqueQualities.length) {
-          uniqueQualities.unshift({ label: "Auto", uri: initialVideoSource });
-        } else {
-          uniqueQualities.push({ label: "Auto", uri: initialVideoSource });
-        }
-        
-        setQualities(uniqueQualities);
-      } catch (error) {
-        console.error("Error fetching qualities: ", error);
-        setQualities([{ label: "Auto", uri: initialVideoSource }]);
-      } finally {
-        setLoadingQualities(false);
-      }
-    };
-    fetchQualities();
-  }
-}, [initialVideoSource]);
-
-  
-
-    const fetchAnimeDetails = async () => {
-    try {
-      const response = await axios.get(`https://partyonyou.vercel.app/meta/anilist/info/${animeId}?provider=animepahe`);
-      const modifiedAnime = {
-        ...response.data,
-        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
-      };
-      setAnime(modifiedAnime);
-      setAnimeId(modifiedAnime.id);
-      if (modifiedAnime.episodes) {
-        const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
-          ...episode,
-          episodeid: episode.id,
-        }));
-        setEpisodes(mappedEpisodes);
-      }
-    } catch (err) {
-      console.error("Error fetching anime details:", err);
-     }
-  };
-
-    useEffect(() => {
-       if (animeId) {
-         fetchAnimeDetails();
-        }
-     }, [animeId]);
-  
-    const parseVTT = (vttText: string) => {
-    const cues: Array<{ start: number; end: number; text: string }> = [];
-    const lines = vttText.split("\n");
-    let cue: { start: number; end: number; text: string } | null = null;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (line.includes("-->")) {
-        const [startStr, endStr] = line.split("-->");
-        const start = parseTime(startStr.trim());
-        const end = parseTime(endStr.trim());
-        cue = { start, end, text: "" };
-      } else if (line === "" && cue) {
-        cues.push(cue);
-        cue = null;
-      } else if (cue) {
-        cue.text += line + " ";
-      }
-    }
-    // Push the last cue if the file does not end with a blank line.
-    if (cue) {
-      cues.push(cue);
-    }
-    return cues;
-  };
-
-  const handleRewind = async () => {
-  const newTime = currentTime - 10000; // 10 seconds in milliseconds
-  await videoRef.current?.setPositionAsync(newTime > 0 ? newTime : 0);
-  setControlsVisible(true); // Show controls briefly after interaction
-  resetControlsTimer(); // Reset the timeout for hiding controls
-};
-
-const handleFastForward = async () => {
-  const newTime = currentTime + 10000; // 10 seconds in milliseconds
-  await videoRef.current?.setPositionAsync(newTime < duration ? newTime : duration);
-  setControlsVisible(true); // Show controls briefly after interaction
-  resetControlsTimer(); // Reset the timeout for hiding controls
-};
-
-// Add this function to manage controls visibility timer
-const resetControlsTimer = () => {
-  if (controlsTimeoutRef.current) {
-    clearTimeout(controlsTimeoutRef.current);
-  }
-  
-  controlsTimeoutRef.current = setTimeout(() => {
-    setControlsVisible(false);
-  }, 3000); // Hide controls after 3 seconds of inactivity
-};
-
-// Add this useEffect to initialize and clean up the timer
-useEffect(() => {
-  if (controlsVisible) {
-    resetControlsTimer();
-  }
-  
-  return () => {
+  const resetControlsTimer = () => {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
     }
+    
+    controlsTimeoutRef.current = setTimeout(() => {
+      setControlsVisible(false);
+    }, 3000);
   };
-}, [controlsVisible]);
 
-  
-
-  // Helper: Convert time string (e.g. "00:01:23.456") to seconds.
-  const parseTime = (timeStr: string) => {
-    const parts = timeStr.split(":");
-    let seconds = 0;
-    if (parts.length === 3) {
-      seconds =
-        parseFloat(parts[0]) * 3600 +
-        parseFloat(parts[1]) * 60 +
-        parseFloat(parts[2]);
-    } else if (parts.length === 2) {
-      seconds = parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  useEffect(() => {
+    if (controlsVisible) {
+      resetControlsTimer();
     }
-    return seconds;
-  };
-    useEffect(() => {
-    const fetchSubtitle = async () => {
-      if (selectedSubtitle !== "disabled") {
-        // Find the subtitle object for the selected kinduage.
-        const subtitleObj = subtitles.find((sub) => sub.kind === selectedSubtitle);
-        if (subtitleObj) {
-          try {
-            const response = await axios.get(subtitleObj.url);
-            const vttText = response.data;
-            const cues = parseVTT(vttText);
-            setParsedSubtitles(cues);
-          } catch (error) {
-            console.error("Error fetching subtitle file:", error);
-          }
-        }
-      } else {
-        setParsedSubtitles([]);
-        setCurrentSubtitle("");
+    
+    return () => {
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
       }
     };
-    fetchSubtitle();
-  }, [selectedSubtitle, subtitles]);
+  }, [controlsVisible]);
 
- 
+  const fetchVideoData = async (version: 'sub' | 'dub' = selectedVersion) => {
+    try {
+      setIsReady(false);
+      setEpisodeLoading(true);
+      
+      const response = await axios.get(
+        `https://kenjitsu.vercel.app/api/animepahe/sources/${episodeid}?version=${version}`,
+        { timeout: 10000 }
+      );
+      const json = response.data;
+      
+      if (json.data?.sources && json.data.sources.length > 0) {
+        const proxyUrl = "https://hls.shrina.dev/proxy?url=";
+        
+        const modifiedSources = json.data.sources.map((source: VideoSource) => ({
+          ...source,
+          url: `${proxyUrl}${encodeURIComponent(source.url)}`,
+          isM3U8: source.isM3u8 || source.type === "hls",
+          isDub: version === 'dub'
+        }));
 
-  const handlePlayPause = async () => {
-    if (paused) await videoRef.current?.playAsync();
-    else await videoRef.current?.pauseAsync();
-    setPaused(!paused);
-    setShowPlayIcon(true);
-    setTimeout(() => setShowPlayIcon(false), 1000);
+        console.log(`Fetched ${version} sources:`, modifiedSources);
+        setSources(modifiedSources);
+        
+        // Sort sources: prioritize BD, then by resolution
+        const sortedSources = [...modifiedSources].sort((a, b) => {
+          const aHasBD = a.quality.includes("BD");
+          const bHasBD = b.quality.includes("BD");
+          
+          if (aHasBD && !bHasBD) return -1;
+          if (!aHasBD && bHasBD) return 1;
+          
+          const getResolution = (quality: string) => {
+            if (quality.includes("1080p")) return 3;
+            if (quality.includes("720p")) return 2;
+            if (quality.includes("480p") || quality.includes("360p")) return 1;
+            return 0;
+          };
+          
+          return getResolution(b.quality) - getResolution(a.quality);
+        });
+        
+        const defaultSource = sortedSources[0];
+        
+        if (defaultSource) {
+          setVideoSource(defaultSource.url);
+          setSelectedQuality(defaultSource.quality);
+          setSelectedVersion(version);
+          console.log(`Selected default quality: ${defaultSource.quality} (${version})`);
+        } else {
+          throw new Error("No valid video sources found");
+        }
+      } else {
+        throw new Error("No sources available in API response");
+      }
+    } catch (error) {
+      console.error("Error fetching video data:", error);
+      
+      const errorMessage = axios.isAxiosError(error)
+        ? error.response?.status === 404
+          ? `Episode not found in ${version} version. Try switching to ${version === 'sub' ? 'dub' : 'sub'}.`
+          : "Failed to load video. Please check your connection."
+        : "An unexpected error occurred.";
+      
+      Alert.alert(
+        "Playback Error",
+        errorMessage,
+        [
+          { text: "Retry", onPress: () => fetchVideoData(version) },
+          { text: "Cancel", style: "cancel" }
+        ]
+      );
+    } finally {
+      setEpisodeLoading(false);
+    }
   };
- 
 
-   const handleToggleFullScreen = async () => {
-      if (!isFullscreen) {
+  const checkAvailableVersions = async () => {
+    const versions: ('sub' | 'dub')[] = [];
+    
+    // Check sub version
+    try {
+      await axios.get(
+        `https://kenjitsu.vercel.app/api/animepahe/sources/${episodeid}?version=sub`,
+        { timeout: 5000 }
+      );
+      versions.push('sub');
+    } catch (error) {
+      console.log('Sub version not available');
+    }
+    
+    // Check dub version
+    try {
+      await axios.get(
+        `https://kenjitsu.vercel.app/api/animepahe/sources/${episodeid}?version=dub`,
+        { timeout: 5000 }
+      );
+      versions.push('dub');
+    } catch (error) {
+      console.log('Dub version not available');
+    }
+    
+    setAvailableVersions(versions);
+    
+    // If current version is not available, switch to available one
+    if (versions.length > 0 && !versions.includes(selectedVersion)) {
+      setSelectedVersion(versions[0]);
+    }
+  };
+
+  const handleVersionToggle = (version: 'sub' | 'dub') => {
+    if (availableVersions.includes(version)) {
+      fetchVideoData(version);
+    } else {
+      Alert.alert(
+        "Not Available",
+        `${version.toUpperCase()} version is not available for this episode.`
+      );
+    }
+  };
+
+  const fetchAnimeDetails = async () => {
+    try {
+      const response = await axios.get(
+        `https://kenjitsu.vercel.app/api/anilist/episodes/${animeId}?provider=animepahe`
+      );
+      
+      if (response.data?.providerEpisodes) {
+        const mappedEpisodes = response.data.providerEpisodes.map((episode: any) => ({
+          id: episode.episodeId,
+          episodeid: episode.episodeId,
+          number: episode.episodeNumber,
+          title: episode.title || `Episode ${episode.episodeNumber}`,
+          image: episode.thumbnail || '',
+          createdAt: episode.airDate || '',
+          rating: episode.rating || '',
+          overview: episode.overview || '',
+          aired: episode.aired,
+        }));
+        
+        setEpisodes(mappedEpisodes);
+        console.log(`Loaded ${mappedEpisodes.length} episodes from provider`);
+      } else {
+        console.warn('No providerEpisodes found in response');
+        setEpisodes([]);
+      }
+    } catch (err) {
+      console.error("Error fetching anime details:", err);
+      Alert.alert(
+        "Error",
+        "Failed to load episodes. Please try again.",
+        [{ text: "OK" }]
+      );
+    }
+  };
+  
+  useEffect(() => {
+    if (episodeid) {
+      checkAvailableVersions();
+      fetchVideoData();
+    }
+  }, [episodeid]);
+
+  useEffect(() => {
+    if (animeId) {
+      fetchAnimeDetails();
+    }
+  }, [animeId]);
+  
+  const webViewHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+      <style>
+        body, html { 
+          margin: 0; 
+          padding: 0; 
+          width: 100%; 
+          height: 100%; 
+          background: #000; 
+          overflow: hidden; 
+          touch-action: none;
+        }
+        #player { 
+          width: 100%; 
+          height: 100%; 
+          outline: none;
+          position: absolute;
+          top: 0;
+          left: 0;
+        }
+        .hidden {
+          display: none;
+        }
+        #loading {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          color: red;
+          font-family: Arial, sans-serif;
+          background: rgba(0,0,0,0.7);
+          padding: 10px 20px;
+          border-radius: 5px;
+          z-index: 10;
+        }
+        #error {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          color: white;
+          font-family: Arial, sans-serif;
+          background: rgba(255,0,0,0.7);
+          padding: 10px 20px;
+          border-radius: 5px;
+          z-index: 10;
+          text-align: center;
+          max-width: 80%;
+        }
+      </style>
+      <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.12"></script>
+    </head>
+    <body>
+      <video id="player" webkit-playsinline playsinline></video>
+      <div id="loading">Loading stream...</div>
+      <div id="error" class="hidden"></div>
+      
+      <script>
+        let isPlayerReady = false;
+        let hls = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
+        let lastActivity = Date.now();
+        
+        document.addEventListener('DOMContentLoaded', function() {
+          const video = document.getElementById('player');
+          const loading = document.getElementById('loading');
+          const errorDiv = document.getElementById('error');
+          const hlsUrl = "${videoSource}";
+          
+          function sendToReactNative(message) {
+            window.ReactNativeWebView.postMessage(JSON.stringify(message));
+          }
+          
+          function setupHls() {
+            if (Hls.isSupported()) {
+              if (hls) {
+                hls.destroy();
+                hls = null;
+              }
+              
+              hls = new Hls({
+                debug: false,
+                enableWorker: true,
+                fragLoadingTimeOut: 20000,
+                manifestLoadingTimeOut: 20000,
+                fragLoadingMaxRetry: 4,
+                manifestLoadingMaxRetry: 4,
+                levelLoadingTimeOut: 20000,
+                abrEwmaDefaultEstimate: 5000000,
+                startLevel: -1,
+                maxBufferLength: 30,
+                maxBufferSize: 15 * 1000 * 1000,
+                maxMaxBufferLength: 60,
+                liveSyncDurationCount: 3
+              });
+              
+              hls.on(Hls.Events.ERROR, function(event, data) {
+                console.log('HLS error:', data);
+                if (data.fatal) {
+                  switch(data.type) {
+                    case Hls.ErrorTypes.NETWORK_ERROR:
+                      console.log('Network error, trying to recover...');
+                      if (retryCount < MAX_RETRIES) {
+                        retryCount++;
+                        errorDiv.textContent = 'Network error, retrying... (' + retryCount + '/' + MAX_RETRIES + ')';
+                        errorDiv.classList.remove('hidden');
+                        setTimeout(() => {
+                          hls.startLoad();
+                          errorDiv.classList.add('hidden');
+                        }, 2000);
+                      } else {
+                        errorDiv.textContent = 'Failed to load video after multiple attempts. Please check your connection and try again.';
+                        errorDiv.classList.remove('hidden');
+                        sendToReactNative({
+                          type: 'error',
+                          message: 'Network error: Failed to load video after multiple attempts'
+                        });
+                      }
+                      break;
+                    case Hls.ErrorTypes.MEDIA_ERROR:
+                      console.log('Media error, trying to recover...');
+                      errorDiv.textContent = 'Media error, recovering...';
+                      errorDiv.classList.remove('hidden');
+                      hls.recoverMediaError();
+                      setTimeout(() => {
+                        errorDiv.classList.add('hidden');
+                      }, 2000);
+                      break;
+                    default:
+                      console.log('Fatal error, cannot recover');
+                      errorDiv.textContent = 'Fatal error: ' + data.details;
+                      errorDiv.classList.remove('hidden');
+                      sendToReactNative({
+                        type: 'error',
+                        message: 'Fatal HLS error: ' + data.details
+                      });
+                      break;
+                  }
+                }
+              });
+              
+              errorDiv.classList.add('hidden');
+              loading.classList.remove('hidden');
+              hls.loadSource(hlsUrl);
+              hls.attachMedia(video);
+              
+              hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
+                console.log('Manifest parsed, levels:', data.levels.length);
+                loading.classList.add('hidden');
+                
+                hls.loadLevel = -1;
+                
+                video.play().then(() => {
+                  console.log('Playback started successfully');
+                }).catch(e => {
+                  console.error('Autoplay blocked:', e);
+                  sendToReactNative({
+                    type: 'autoplay_blocked'
+                  });
+                });
+                
+                isPlayerReady = true;
+                retryCount = 0;
+                
+                sendToReactNative({
+                  type: 'ready',
+                  duration: video.duration || 0,
+                  levels: data.levels.length
+                });
+                
+                setInterval(function() {
+                  if (isPlayerReady) {
+                    sendToReactNative({
+                      type: 'status',
+                      currentTime: video.currentTime || 0,
+                      duration: video.duration || 0,
+                      paused: video.paused,
+                      buffering: video.readyState < 3,
+                      buffered: video.buffered.length > 0 ? 
+                        video.buffered.end(video.buffered.length - 1) : 0,
+                      currentLevel: hls.currentLevel
+                    });
+                  }
+                }, 500);
+              });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+              loading.classList.remove('hidden');
+              video.src = hlsUrl;
+              
+              video.addEventListener('loadedmetadata', function() {
+                loading.classList.add('hidden');
+                video.play().catch(e => console.error('Autoplay blocked:', e));
+                isPlayerReady = true;
+                
+                sendToReactNative({
+                  type: 'ready',
+                  duration: video.duration || 0
+                });
+                
+                setInterval(function() {
+                  sendToReactNative({
+                    type: 'status',
+                    currentTime: video.currentTime || 0,
+                    duration: video.duration || 0,
+                    paused: video.paused,
+                    buffering: video.readyState < 3,
+                    buffered: video.buffered.length > 0 ? 
+                      video.buffered.end(video.buffered.length - 1) : 0
+                  });
+                }, 500);
+              });
+              
+              video.addEventListener('error', function(e) {
+                errorDiv.textContent = 'Video error: ' + (video.error ? video.error.message : 'Unknown error');
+                errorDiv.classList.remove('hidden');
+                loading.classList.add('hidden');
+                
+                sendToReactNative({
+                  type: 'error',
+                  message: 'Video error: ' + (video.error ? video.error.message : 'Unknown error')
+                });
+              });
+            } else {
+              loading.classList.add('hidden');
+              errorDiv.textContent = "HLS not supported on this device";
+              errorDiv.classList.remove('hidden');
+              
+              console.error('HLS is not supported on this device');
+              sendToReactNative({
+                type: 'error',
+                message: 'HLS not supported on this device'
+              });
+            }
+          }
+          
+          let bufferingTimeout;
+          
+          video.addEventListener('waiting', function() {
+            clearTimeout(bufferingTimeout);
+            bufferingTimeout = setTimeout(() => {
+              sendToReactNative({
+                type: 'buffering',
+                isBuffering: true
+              });
+            }, 300);
+          });
+          
+          video.addEventListener('canplay', function() {
+            clearTimeout(bufferingTimeout);
+            sendToReactNative({
+              type: 'buffering',
+              isBuffering: false
+            });
+          });
+          
+          video.addEventListener('playing', function() {
+            clearTimeout(bufferingTimeout);
+            sendToReactNative({
+              type: 'buffering',
+              isBuffering: false
+            });
+          });
+          
+          if (hlsUrl) {
+            setupHls();
+          } else {
+            errorDiv.textContent = "No video URL provided";
+            errorDiv.classList.remove('hidden');
+            loading.classList.add('hidden');
+          }
+          
+          window.addEventListener('message', function(event) {
+            try {
+              const message = JSON.parse(event.data);
+              
+              switch(message.type) {
+                case 'seek':
+                  if (isPlayerReady && !isNaN(message.time)) {
+                    video.currentTime = message.time;
+                  }
+                  break;
+                  
+                case 'play':
+                  if (isPlayerReady) {
+                    video.play().catch(e => console.error('Play blocked:', e));
+                  }
+                  break;
+                  
+                case 'pause':
+                  if (isPlayerReady) {
+                    video.pause();
+                  }
+                  break;
+                  
+                case 'seekForward':
+                  if (isPlayerReady) {
+                    video.currentTime = Math.min(video.duration, video.currentTime + message.seconds);
+                  }
+                  break;
+                  
+                case 'seekBackward':
+                  if (isPlayerReady) {
+                    video.currentTime = Math.max(0, video.currentTime - message.seconds);
+                  }
+                  break;
+                  
+                case 'setQuality':
+                  if (isPlayerReady && hls) {
+                    hls.currentLevel = message.level;
+                  }
+                  break;
+                  
+                case 'reload':
+                  const savedTime = message.savedTime || video.currentTime || 0;
+                  setupHls();
+                  // Wait for HLS to be ready, then seek to saved position
+                  const seekInterval = setInterval(() => {
+                    if (isPlayerReady && video.readyState >= 2) {
+                      clearInterval(seekInterval);
+                      video.currentTime = savedTime;
+                      video.play().catch(e => console.error('Play after reload failed:', e));
+                    }
+                  }, 100);
+                  // Clear interval after 5 seconds if not ready
+                  setTimeout(() => clearInterval(seekInterval), 5000);
+                  break;
+              }
+            } catch (e) {
+              console.error('Invalid message:', e);
+            }
+          });
+          
+          let touchStartTime = 0;
+          let touchStartX = 0;
+          let touchStartY = 0;
+          
+          document.addEventListener('touchstart', function(e) {
+            touchStartTime = Date.now();
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+          });
+          
+          document.addEventListener('touchend', function(e) {
+            const touchEndTime = Date.now();
+            const touchDuration = touchEndTime - touchStartTime;
+            
+            if (touchDuration < 300) {
+              sendToReactNative({
+                type: 'tap'
+              });
+            }
+          });
+          
+          document.addEventListener('click', function() {
+            sendToReactNative({
+              type: 'tap'
+            });
+          });
+        });
+      </script>
+    </body>
+    </html>
+  `;
+
+  useEffect(() => {
+    if (episodes.length > 0 && episodeid) {
+      const episode = episodes.find(ep => ep.episodeid === episodeid);
+      setCurrentEpisode(episode || null);
+      
+      setFilteredEpisodes(episodes);
+      
+      const index = episodes.findIndex(ep => ep.episodeid === episodeid);
+      setCurrentIndex(index >= 0 ? index : 0);
+    }
+  }, [episodeid, episodes]);
+
+  const handlePreviousEpisode = () => {
+    if (currentIndex > 0 && episodes.length > 0) {
+      const previousEpisode = episodes[currentIndex - 1];
+      if (previousEpisode) {
+        setEpisodeLoading(true);
+        setEpisodeid(previousEpisode.episodeid);
+      }
+    }
+  };
+
+  const handleNextEpisode = () => {
+    if (currentIndex < episodes.length - 1 && episodes.length > 0) {
+      const nextEpisode = episodes[currentIndex + 1];
+      if (nextEpisode) {
+        setEpisodeLoading(true);
+        setEpisodeid(nextEpisode.episodeid);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (showControls) {
+      if (controlsTimerRef.current) {
+        clearTimeout(controlsTimerRef.current);
+      }
+      
+      controlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, 3000);
+    }
+    
+    return () => {
+      if (controlsTimerRef.current) {
+        clearTimeout(controlsTimerRef.current);
+      }
+    };
+  }, [showControls, isReady]);
+  
+  useEffect(() => {
+    if (isBuffering) {
+      bufferingTimerRef.current = setTimeout(() => {
+        if (isBuffering && webViewRef.current) {
+          console.log("Buffering persisted too long, attempting recovery...");
+          // Save current time before reloading
+          const savedTime = currentTime;
+          sendToWebView({ type: 'reload', savedTime });
+          setIsBuffering(false);
+        }
+      }, 15000);
+    }
+    
+    return () => {
+      if (bufferingTimerRef.current) {
+        clearTimeout(bufferingTimerRef.current);
+      }
+    };
+  }, [isBuffering, currentTime]);
+  
+  useEffect(() => {
+    return () => {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(e => {
+        console.error("Failed to reset orientation:", e);
+      });
+    };
+  }, []);
+
+  const formatTime = (seconds: number): string => {
+    if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00';
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleToggleFullScreen = async () => {
+    try {
+      if (isFullscreen) {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+        await NavigationBar.setVisibilityAsync("visible");
+        setControlsVisible(true);
+        StatusBar.setHidden(false);
+        navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
+      } else {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
         await NavigationBar.setVisibilityAsync("hidden");
+        setControlsVisible(true);
+        StatusBar.setHidden(true);
         navigation.getParent()?.setOptions({ tabBarStyle: { display: "none" } });
-            StatusBar.setHidden(true,);  
-         setControlsVisible(true);
-      } else {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-        await NavigationBar.setVisibilityAsync("visible");
-        navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-            StatusBar.setHidden(false,); // Show the status bar
-
-         setControlsVisible(true);
       }
+      
       setIsFullscreen(!isFullscreen);
-    };
- 
+    } catch (error) {
+      console.error("Failed to change orientation:", error);
+    }
+  };
+
+  const togglePlayPause = (): void => {
+    if (!webViewRef.current) return;
     
- const handlePreviousEpisode = () => {
-  if (filteredEpisodes.length > 0) {
-    if (currentIndex > 0) {
-      const previousEpisode = filteredEpisodes[currentIndex - 1];
-      setEpisodeLoading(true);
-      setEpisodeid(previousEpisode.episodeid);
-      navigation.navigate("Animepahe");
+    const command: WebViewCommand = isPlaying ? { type: 'pause' } : { type: 'play' };
+    sendToWebView(command);
+    setIsPlaying(!isPlaying);
+  };
+
+  const seekBackward = () => {
+    if (!webViewRef.current) return;
+    sendToWebView({ type: 'seekBackward', seconds: 10 });
+  };
+
+  const seekForward = () => {
+    if (!webViewRef.current) return;
+    sendToWebView({ type: 'seekForward', seconds: 10 });
+  };
+
+  const onSlidingComplete = (value: number): void => {
+    if (!webViewRef.current || !duration) return;
+    const newPosition = value * duration;
+    sendToWebView({ type: 'seek', time: newPosition });
+  };
+
+  const sendToWebView = (command: WebViewCommand): void => {
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.postMessage('${JSON.stringify(command)}', '*');
+        true;
+      `);
     }
-  }
-};
-
-const returnToPortraitMode = async () => {
-  if (isFullscreen) {
-    await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-    await NavigationBar.setVisibilityAsync("visible");
-    navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-    StatusBar.setHidden(false);
-    setIsFullscreen(false);
-  }
-};
-
-const handleNextEpisode = () => {
-  if (filteredEpisodes.length > 0) {
-    if (currentIndex < filteredEpisodes.length - 1) {
-      const nextEpisode = filteredEpisodes[currentIndex + 1];
-      setEpisodeLoading(true);
-      setEpisodeid(nextEpisode.episodeid);
-      navigation.navigate("Animepahe");
+  };
+  
+  const getFilteredEpisodes = () => {
+    if (!searchQuery.trim()) {
+      return episodes;
     }
-  }
-};
+    
+    return episodes.filter(episode => {
+      const episodeNumber = episode.number.toString();
+      return episodeNumber.includes(searchQuery);
+    });
+  };
 
+  const returnToPortraitMode = async () => {
+    if (isFullscreen) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+      await NavigationBar.setVisibilityAsync("visible");
+      navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
+      StatusBar.setHidden(false);
+      setIsFullscreen(false);
+    }
+  };
 
- 
+  const changeQuality = (source: VideoSource): void => {
+    setVideoSource(source.url);
+    setSelectedQuality(source.quality);
+    setPickerVisible(false);
+    setIsReady(false);
+  };
+  
+  const retryPlayback = () => {
+    if (webViewRef.current) {
+      sendToWebView({ type: 'reload', savedTime: currentTime });
+    }
+  };
 
-   const filteredEpisodes = episodes
-    .filter((episode) => {
-      if (!searchQuery) return true;
-      return episode.number.toString().includes(searchQuery);
-    })
-    .sort((a, b) => Number(a.number) - Number(b.number));
-
-      const currentIndex = filteredEpisodes.findIndex(
-    (ep) => ep.episodeid === episodeid
-  );
-
-      const currentEpisode = episodes.find((ep) => ep.episodeid === episodeid);
-
-      const renderEpisodeItem = ({ item }: { item: Episode }) => {
-        return (
-          <TouchableOpacity
-            style={styles.episodeContainer}
-            onPress={() => {
-          setEpisodeLoading(true);
-              setEpisodeid(item.episodeid);
-              navigation.navigate("Animepahe");
-            }}
-          >
-            <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
-            <View style={styles.episodeTextContainer}>
-              <Text style={styles.episodeTitle}>Episode {item.number}</Text>
-              <Text style={styles.episodeTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={styles.episodeMeta}>{item.createdAt}</Text>
-            </View>
-          </TouchableOpacity>
-        );
-      };
-
-         if (episodeLoading) {
-          return (
-            <View style={styles.loadingContainer2}>
-              <Image
-                source={{ uri: "https://media.tenor.com/On7kvXhzml4AAAAj/loading-gif.gif" }}
-                style={styles.loadingGif}
-              />
-            </View>
+  const handleWebViewMessage = (event: { nativeEvent: { data: string } }): void => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      
+      switch (data.type) {
+        case 'status':
+          setCurrentTime(data.currentTime || 0);
+          setDuration(data.duration || 0);
+          setIsPlaying(!data.paused);
+          setIsBuffering(data.buffering);
+          break;
+          
+        case 'buffering':
+          setIsBuffering(data.isBuffering);
+          break;
+          
+        case 'ready':
+          setIsReady(true);
+          setDuration(data.duration || 0);
+          break;
+          
+        case 'error':
+          Alert.alert(
+            "Playback Error", 
+            data.message, 
+            [
+              { text: "Retry", onPress: retryPlayback },
+              { text: "OK" }
+            ]
           );
-        }
-        
+          break;
+          
+        case 'tap':
+          setShowControls(!showControls);
+          break;
+          
+        case 'autoplay_blocked':
+          sendToWebView({ type: 'play' });
+          break;
+      }
+    } catch (e) {
+      console.error('Failed to parse WebView message:', e);
+    }
+  };
+
+  const renderEpisodeItem = ({ item }: { item: Episode }) => {
+    const isCurrentEpisode = item.episodeid === episodeid;
+    
+    return (
+      <TouchableOpacity
+        style={[styles.episodeContainer, isCurrentEpisode && styles.currentEpisode]}
+        onPress={() => {
+          setEpisodeLoading(true);
+          setEpisodeid(item.episodeid);
+        }}
+        disabled={episodeLoading || isCurrentEpisode}
+      >
+        <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
+        <View style={styles.episodeTextContainer}>
+          <Text style={styles.episodeTitle}>Episode {item.number}</Text>
+          <Text style={styles.episodeTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          <Text style={styles.episodeMeta}>{item.createdAt}</Text>
+        </View>
+        {isCurrentEpisode && (
+          <View style={styles.playingIndicator}>
+            <MaterialIcons name="play-arrow" size={20} color="#e50914" />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
-  <Pressable 
-  onPress={() => setControlsVisible(!controlsVisible)}
-  style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
->
-  
-  {videoError ? (
-    // Error state - only show error content
-    <View style={styles.errorContainer}>
-      <Image
-        source={{ uri: "https://img.freepik.com/free-vector/glitch-error-404-page_23-2148105404.jpg?t=st=1745470901~exp=1745474501~hmac=e12cc53fcf022d08acf6c5416b21ad457b494572dda8eee4a8c724b7d5fe1127&w=826" }}
-        style={styles.errorImage}
-        resizeMode="contain"
-      />
-      <Text style={styles.errorText}>Video not found</Text>
-      <TouchableOpacity 
-        style={styles.retryButton}
-        onPress={() => {
-          setVideoError(false);
-          fetchVideoData();
-        }}
+      <Pressable 
+        onPress={() => setShowControls(!showControls)}
+        style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}
       >
-        <Text style={styles.retryButtonText}>Retry</Text>
-      </TouchableOpacity>
-    </View>
-  ) : (
-    // Video playing state - show video and controls
-    <>
-          
-        <VideoWithSubtitles
-        ref={videoRef}
-        source={{ uri: videoSource }}
-        style={styles.video}
-        resizeMode={ResizeMode.CONTAIN}
-        shouldPlay
-        volume={volume}
-        onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-        textTracks={subtitles.map(sub => ({
-          uri: sub.url,
-          kinduage: sub.kind,
-          type: "text/vtt",
-          title: sub.kind,
-        }))}
-        selectedTextTrack={{
-          type: selectedSubtitle === "disabled" ? "disabled" : "title",
-          value: selectedSubtitle,
-        }}
-      />
- 
-      
-      {currentSubtitle && (
-        <View style={styles.subtitleContainer}>
-          <Text style={styles.subtitleText}>{currentSubtitle}</Text>
-        </View>
-      )}
-
-      <TouchableWithoutFeedback onPress={() => !isLocked && setControlsVisible(!controlsVisible)}>
-        <View style={[styles.overlay, isFullscreen && styles.fullscreenOverlay]}>
-          {controlsVisible && (
-            <>
-              <View style={styles.topControls}>
-              <TouchableOpacity onPress={async () => {
-  await returnToPortraitMode();
-  navigation.goBack();
-}}>
-  <Ionicons name="arrow-back" size={24} color="white" />
-  
-</TouchableOpacity>
-  {currentEpisode && (
-              <Text style={styles.episodeNumberText}>
-                Episode {currentEpisode.number}
-              </Text>
-            )}
-                <View style={styles.rightControls}>
-                
-                  <TouchableOpacity onPress={() => setPickerVisible(true)}>
-                    <Ionicons name="settings" size={24} color="white" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleToggleFullScreen}>
-                    <Ionicons name={isFullscreen ? "contract" : "expand"} size={24} color="white" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-              <View style={styles.segmentsContainer}>
-                {introSegment &&
-                  currentTime / 1000 >= introSegment.start &&
-                  currentTime / 1000 < introSegment.end && (
-                    <TouchableOpacity
-                      style={styles.skipButton}
-                      onPress={() => {
-                        // Jump to the end of the intro segment.
-                        videoRef.current?.setPositionAsync(introSegment.end * 1000);
-                      }}
-                    >
-                      <Text style={styles.skipButtonText}>Skip Intro</Text>
-                    </TouchableOpacity>
-                  )}
-                {outroSegment &&
-                  outroSegment.start !== 0 &&
-                  currentTime / 1000 >= outroSegment.start &&
-                  currentTime / 1000 < outroSegment.end && (
-                    <TouchableOpacity
-                      style={styles.skipButton}
-                      onPress={() => {
-                        // Jump to the end of the outro segment.
-                        videoRef.current?.setPositionAsync(outroSegment.end * 1000);
-                      }}
-                    >
-                      <Text style={styles.skipButtonText}>Skip Outro</Text>
-                    </TouchableOpacity>
-                  )}
-              </View>
-
-              <View style={styles.bottomControls}>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={0}
-                  maximumValue={duration}
-                  value={sliderValue}
-                  onSlidingStart={() => setIsSliding(true)}
-                  onSlidingComplete={async (value) => {
-                    await videoRef.current?.setPositionAsync(value);
-                    setIsSliding(false);
-                  }}
-                  minimumTrackTintColor="#E50914"
-                  maximumTrackTintColor="#404040"
-                  thumbTintColor="#E50914"
-                />
-
-                <View style={styles.timeControls}>
-                  <Text style={styles.timeText}>{formatTime(currentTime / 1000)}</Text>
-                  <View style={styles.volumeWrapper}>
-                    <TouchableOpacity onPress={() => setShowVolumeSlider(true)}>
-                      <Ionicons name={getVolumeIcon(volume)} size={28} color="white" />
-                    </TouchableOpacity>
-                    {showVolumeSlider && (
-                      <Slider
-                        style={styles.volumeSlider}
-                        minimumValue={0}
-                        maximumValue={1}
-                        value={volume}
-                        onValueChange={setVolume}
-                        onSlidingComplete={() => setShowVolumeSlider(false)}
-                        minimumTrackTintColor="red"
-                        maximumTrackTintColor="gray"
-                        thumbTintColor="red"
-                      />
-                    )}
-                  </View>
-                  <View style={styles.centerControls}>
-                    <TouchableOpacity
-      onPress={handlePreviousEpisode}
-      disabled={currentEpisode && currentIndex <= 0}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex <= 0) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-back" size={30} color="white" />
-    </TouchableOpacity>
-                    <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
-                      <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
-                    </TouchableOpacity>
-                  <TouchableOpacity
-      onPress={handleNextEpisode}
-      disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-forward" size={30} color="white" />
-    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
-                </View>
-              </View>
-              <View style={styles.playIconOverlayRow}>
-  {isVideoLoading ? (
-    // Only show spinner while loading
-    <View style={styles.loadingContainer}>
-      <ActivityIndicator size="large" color="red" />
-    </View>
-  ) : (
-    // Show rewind, play/pause, and fast-forward once loaded
-    <>
-      <TouchableOpacity 
-        onPress={handleRewind} 
-        style={styles.rewindOverlay}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Image 
-          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_backward-1024.png" }} 
-          style={styles.rewindIcon} 
-        />
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        onPress={handlePlayPause}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Ionicons name={paused ? "play" : "pause"} size={50} color="white" />
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        onPress={handleFastForward} 
-        style={styles.fastForwardOverlay}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Image 
-          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_forward-1024.png" }} 
-          style={styles.fastForwardIcon} 
-        />
-      </TouchableOpacity>
-    </>
-  )}
-</View>
-            </>
-          )}
-
-           
-        </View>
-      </TouchableWithoutFeedback>
-    </>
-  )}
-</Pressable>
-
-        
- <Modal visible={pickerVisible} transparent animationType="slide">
-   <View style={styles.modalBackdrop}>
-     <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Select Quality</Text>
-          {sources.map((source: VideoSource) => (
-            <TouchableOpacity
-              key={source.url}
-              style={[
-                styles.qualityItem,
-                source.quality === selectedQuality ? styles.selectedQuality : null
-              ]}
-              onPress={async () => {
-                try {
-                  // Update the video source with the selected quality URL
-                  setVideoSource(source.url);
-                  setSelectedQuality(source.quality);
-                  setPickerVisible(false);
-                  
-                  // Get current position if video ref exists
-                  if (videoRef.current) {
-                    try {
-                      const status = await videoRef.current.getStatusAsync();
-                      const currentTime = status.positionMillis;
-                      
-                      // Give the video a moment to load the new source, then seek
-                      setTimeout(() => {
-                        if (videoRef.current) {
-                          videoRef.current.setPositionAsync(currentTime)
-                            .catch(err => console.error("Error seeking:", err));
-                        }
-                      }, 1000);
-                    } catch (statusError) {
-                      console.error("Error getting video status:", statusError);
-                    }
-                  }
-                } catch (error) {
-                  console.error("Error changing quality:", error);
-                }
-              }}
-            >
-              <Text style={styles.qualityText}>
-                {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
-            <Text style={styles.closeText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-   </View>
- </Modal>
-
-      {/* Subtitles Picker Modal */}
-         
-      <Modal visible={subtitlesPickerVisible} transparent animationType="slide">
-           <View style={styles.nextEpisodesHeader}>
-              <Text style={styles.nextEpisodesText}>Episodes</Text>
-                
+        <WebView
+          ref={webViewRef}
+          source={{ html: webViewHtml }}
+          style={styles.webview}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          allowsInlineMediaPlayback={true}
+          mediaPlaybackRequiresUserAction={false}
+          allowsFullscreenVideo={true}
+          onMessage={handleWebViewMessage}
+          originWhitelist={['*']}
+          scrollEnabled={false}
+          startInLoadingState={true}
+          renderLoading={() => (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="red" />
             </View>
-       <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Quality</Text>
-            {sources.map((source: VideoSource) => (
-              <TouchableOpacity
-                key={source.url}
-                style={[
-                  styles.qualityItem,
-                  source.quality === selectedQuality ? styles.selectedQuality : null
-                ]}
-                onPress={async () => {
-                  try {
-                    // Update the video source with the selected quality URL
-                    setVideoSource(source.url);
-                    setSelectedQuality(source.quality);
-                    setPickerVisible(false);
-                    
-                    // Get current position if video ref exists
-                    if (videoRef.current) {
-                      try {
-                        const status = await videoRef.current.getStatusAsync();
-                        const currentTime = status.positionMillis;
-                        
-                        // Give the video a moment to load the new source, then seek
-                        setTimeout(() => {
-                          if (videoRef.current) {
-                            videoRef.current.setPositionAsync(currentTime)
-                              .catch(err => console.error("Error seeking:", err));
-                          }
-                        }, 1000);
-                      } catch (statusError) {
-                        console.error("Error getting video status:", statusError);
-                      }
-                    }
-                  } catch (error) {
-                    console.error("Error changing quality:", error);
-                  }
-                }}
-              >
-                <Text style={styles.qualityText}>
-                  {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
-                </Text>
+          )}
+        />
+        
+        {isBuffering && (
+          <View style={styles.bufferingContainer}>
+            <ActivityIndicator size="large" color="red" />
+          </View>
+        )}
+        
+        {showControls && (
+          <View style={styles.customControls}>
+            <View style={styles.topControls}>
+              <TouchableOpacity onPress={async () => {
+                await returnToPortraitMode();
+                navigation.goBack();
+              }}>
+                <Ionicons name="arrow-back" size={24} color="white" />
               </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
+              
+              <Text style={styles.episodeNumberText}>
+                Episode {currentEpisode?.number}
+              </Text>
+              
+            
+              
+              <View style={styles.rightControls}>
+                <TouchableOpacity 
+                  style={styles.qualityButton}
+                  onPress={() => setPickerVisible(!pickerVisible)}
+                >
+                  <Ionicons name="settings" size={24} color="white" />
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.fullscreenButton}
+                  onPress={handleToggleFullScreen}
+                >
+                  <MaterialIcons 
+                    name={isFullscreen ? "fullscreen-exit" : "fullscreen"} 
+                    size={24} 
+                    color="white" 
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+            
+            <View style={styles.seekControls}>
+              <TouchableOpacity onPress={seekBackward} style={styles.controlButton}>
+                <MaterialIcons name="replay-10" size={32} color="white" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseButton}>
+                <MaterialIcons 
+                  name={isPlaying ? "pause" : "play-arrow"} 
+                  size={48} 
+                  color="white" 
+                />
+              </TouchableOpacity>
+              
+              <TouchableOpacity onPress={seekForward} style={styles.controlButton}>
+                <MaterialIcons name="forward-10" size={32} color="white" />
+              </TouchableOpacity>
+            </View>
+            
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
+              
+              <Slider
+                style={styles.progressSlider}
+                minimumValue={0}
+                maximumValue={1}
+                value={duration > 0 ? currentTime / duration : 0}
+                onSlidingComplete={onSlidingComplete}
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="rgba(255, 255, 255, 0.5)"
+                thumbTintColor="#FFFFFF"
+              />
+              
+              <Text style={styles.timeText}>{formatTime(duration)}</Text>
+            </View>
+          </View>
+        )}
+        
+        <TouchableOpacity 
+          style={styles.touchOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            setShowControls(!showControls);
+            setPickerVisible(false);
+          }}
+        />
+      </Pressable>
+
+      <Modal visible={pickerVisible} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={[
+            styles.modalContent, 
+            isFullscreen && styles.modalContentFullscreen
+          ]}>
+            <Text style={styles.modalTitle}>Select Quality</Text>
+            <ScrollView style={styles.qualityScrollView}>
+              {sources.map((source, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.qualityItem,
+                    selectedQuality === source.quality && styles.selectedQuality
+                  ]}
+                  onPress={() => changeQuality(source)}
+                >
+                  <Text style={styles.qualityText}>
+                    {source.quality} {source.isDub ? '(Dub)' : ''}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={() => setPickerVisible(false)}
+            >
               <Text style={styles.closeText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-       {!isFullscreen && (
- <> 
-   {currentEpisode && (
-  <View style={styles.episodeNavigation}>
-    <TouchableOpacity
-      onPress={handlePreviousEpisode}
-      disabled={currentEpisode && currentIndex <= 0}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex <= 0) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-back" size={30} color="white" />
-    </TouchableOpacity>
-    <Text style={styles.episodeNumberText}>
-      Episode {currentEpisode?.number}
-    </Text>
-    <TouchableOpacity
-      onPress={handleNextEpisode}
-      disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-forward" size={30} color="white" />
-    </TouchableOpacity>
-  </View>
-)}
-  <View style={styles.nextEpisodesHeader}>
-  <View style={styles.headerLeft}>
-    <Text style={styles.nextEpisodesText}>Episodes</Text>
-  </View>
- 
-  <View style={styles.headerRight}>
-    <View style={styles.headerControls}>
-      <TouchableOpacity 
-        style={styles.downloadButton} 
-        onPress={() => setModalVisible(true)}
-      >
-        <Ionicons name="download" size={20} color="white" />
-        <Text style={styles.downloadButtonText}>Download Episode</Text>
-      </TouchableOpacity>
 
-      <TextInput
-        style={styles.searchInput}
-        placeholder="Search by number"
-        placeholderTextColor="#888"
-        value={searchQuery}
-        onChangeText={setSearchQuery}
-        keyboardType="numeric"
-      />
-    </View>
-  </View>
+      {currentEpisode && (
+        <View style={styles.episodeNavigation}>
+          <TouchableOpacity
+            onPress={handlePreviousEpisode}
+            disabled={currentEpisode && currentIndex <= 0}
+            style={[
+              styles.navButton,
+              (currentEpisode && currentIndex <= 0) && styles.disabledButton,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={30} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.episodeNumberText}>
+            Episode {currentEpisode?.number}
+          </Text>
+          <TouchableOpacity
+            onPress={handleNextEpisode}
+            disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
+            style={[
+              styles.navButton,
+              (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
+            ]}
+          >
+            <Ionicons name="chevron-forward" size={30} color="white" />
+          </TouchableOpacity>
+        </View>
+      )}
 
-  <Modal
-    animationType="slide"
-    transparent={true}
-    visible={modalVisible}
-    onRequestClose={() => setModalVisible(false)}
-  >
-    <View style={styles.modalBackdrop}>
-      <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Download Options</Text>
-        
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#E50914" />
-            <Text style={styles.loadingText}>Loading download options...</Text>
-          </View>
-        ) : error ? (
-          <Text style={styles.errorText}>{error}</Text>
-        ) : downloadOptions.length === 0 ? (
-          <Text style={styles.noOptionsText}>No download options available</Text>
-        ) : (
-          downloadOptions.map((option, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.downloadOption}
-              onPress={() => handleDownload(option.url)}
-            >
-              <Text style={styles.qualityText}>{option.quality}</Text>
-              <Ionicons name="cloud-download-outline" size={24} color="#E50914" />
-            </TouchableOpacity>
-          ))
-        )}
-        
-        <TouchableOpacity
-          style={styles.closeButton}
-          onPress={() => setModalVisible(false)}
-        >
-          <Text style={styles.closeText}>Close</Text>
-        </TouchableOpacity>
+      <View style={styles.nextEpisodesHeader}>
+           <Text style={styles.nextEpisodesText}>Episodes</Text>
+             <View style={styles.versionSelector}>
+                <TouchableOpacity
+                  style={[
+                    styles.versionButton,
+                    selectedVersion === 'sub' && styles.versionButtonActive,
+                    !availableVersions.includes('sub') && styles.versionButtonDisabled
+                  ]}
+                  onPress={() => handleVersionToggle('sub')}
+                  disabled={!availableVersions.includes('sub')}
+                >
+                  <Text style={[
+                    styles.versionButtonText,
+                    selectedVersion === 'sub' && styles.versionButtonTextActive
+                  ]}>SUB</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[
+                    styles.versionButton,
+                    selectedVersion === 'dub' && styles.versionButtonActive,
+                    !availableVersions.includes('dub') && styles.versionButtonDisabled
+                  ]}
+                  onPress={() => handleVersionToggle('dub')}
+                  disabled={!availableVersions.includes('dub')}
+                >
+                  <Text style={[
+                    styles.versionButtonText,
+                    selectedVersion === 'dub' && styles.versionButtonTextActive
+                  ]}>DUB</Text>
+                </TouchableOpacity>
+               </View>
+           <View style={styles.headerControls}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by number"
+              placeholderTextColor="#888"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              keyboardType="numeric"
+            />
+         </View>
       </View>
-    </View>
-  </Modal>
-</View>
+
+      {!isFullscreen && episodes.length > 0 && (
+        <View style={styles.episodesSection}>
           <FlatList
-            data={filteredEpisodes}
+            data={getFilteredEpisodes()}
             renderItem={renderEpisodeItem}
             keyExtractor={(item) => item.episodeid}
-             contentContainerStyle={styles.episodesList}
+            contentContainerStyle={styles.episodesList}
           />
-           </>
-         )}  
+        </View>
+      )}
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#000",
   },
-  normalContainer: {
-    height: height * 0.4,
+  videoContainer: {
+    width: '100%',
+    height: 240,
+    backgroundColor: '#000',
+    position: 'relative',
   },
   fullscreenContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000',
+    zIndex: 999,
+  },
+  webview: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
+  },
+  touchOverlay: {
     ...StyleSheet.absoluteFillObject,
-    zIndex: 1,
+    backgroundColor: 'transparent',
   },
-  video: {
-    width: "100%",
-    height: "100%",
+  bufferingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
   },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "space-between",
-    padding: 16,
-  },
-  fullscreenOverlay: {
-    paddingHorizontal: 32,
-  },
-  topControls: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  rightControls: {
-    flexDirection: "row",
-    gap: 20,
-  },
-  bottomControls: {
-    marginBottom: 16,
-  },
-  slider: {
-    width: "100%",
-    height: 40,
-  },
-  timeControls: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  timeText: {
-    color: "#fff",
-    fontSize: 14,
-  },
-    volumeWrapper: {
-    position: "relative",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  volumeSlider: {
-    position: "absolute",
-    bottom: 65,
-    left: -58,
-    width: 150,
-    height: 40,
-    transform: [{ rotate: "-90deg" }],
-  },
-  centerControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 20,
-  },
-  playIconOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  subtitleContainer: {
-    position: "absolute",
-    bottom: 100,
-    alignSelf: "center",
-    backgroundColor: "rgba(0,0,0,0.7)",
-    padding: 8,
-    borderRadius: 4,
-  },
-  subtitleText: {
-    color: "#fff",
-    fontSize: 16,
-  },
-    segmentsContainer: {
-    alignItems: "center",
-    marginBottom: 5,
-   top: 150,
-    right: 10,
-    zIndex: 10,
-    position: "absolute",
-  },
-   skipButton: {
-  backgroundColor: 'red',
-  paddingVertical: 10,
-  paddingHorizontal: 20,
-  borderRadius: 20,
-  borderWidth: 1,
-  borderColor: 'red',
-  alignItems: 'center',
-  marginVertical: 5,
-  
-},
-skipButtonText: {
-  color: 'white',
-  fontSize: 16,
-  fontWeight: 'bold',
-},
-  controlButton: {
-    marginHorizontal: 15,
-  },
-  
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalContent: {
-    backgroundColor: "#1a1a1a",
-    padding: 20,
-    borderRadius: 10,
-    width: "80%",
-  },
-  modalTitle: {
-    color: "#fff",
-    fontSize: 18,
-    marginBottom: 15,
-    textAlign: "center",
-  },
-  qualityItem: {
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#404040",
-  },
-  qualityText: {
-    color: "#fff",
-    fontSize: 16,
-    textAlign: "center",
-  },
-  closeButton: {
-    marginTop: 20,
-    padding: 12,
-    backgroundColor: "#E50914",
-    borderRadius: 6,
-  },
-  closeText: {
-    color: "#fff",
-    textAlign: "center",
-    fontWeight: "bold",
-  },
-    loadingContainer: {
+  loadingContainer: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.5)",
   },
-   episodeContainer: {
+  customControls: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'space-between',
+    padding: 16,
+    zIndex: 10,
+  },
+  topControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  versionSelector: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 6,
+    overflow: 'hidden',
+   },
+  versionButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  versionButtonActive: {
+    backgroundColor: '#e50914',
+    borderColor: '#e50914',
+  },
+  versionButtonDisabled: {
+    opacity: 0.3,
+  },
+  versionButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  versionButtonTextActive: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  qualityButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 4,
+  },
+  qualityButtonText: {
+    color: 'white',
+    fontSize: 14,
+  },
+  rightControls: {
+    flexDirection: "row",
+    gap: 20,
+  },
+  fullscreenButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 4,
+  },
+  seekControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 'auto',
+  },
+  controlButton: {
+    padding: 10,
+  },
+  playPauseButton: {
+    padding: 10,
+    marginHorizontal: 40,
+  },
+  progressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  progressSlider: {
+    flex: 1,
+    height: 40,
+    marginHorizontal: 8,
+  },
+  timeText: {
+    color: 'white',
+    fontSize: 12,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContentFullscreen: {
+    width: '80%',
+    maxWidth: 300,
+    maxHeight: '80%',
+  },
+  qualityScrollView: {
+    maxHeight: 300,
+  },
+  modalContent: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 20,
+    width: '80%',
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  qualityItem: {
+    padding: 14,
+    borderRadius: 8,
+    marginBottom: 10,
+    backgroundColor: '#2a2a2a',
+  },
+  selectedQuality: {
+    backgroundColor: '#e50914',
+  },
+  qualityText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  closeButton: {
+    backgroundColor: '#333',
+    padding: 14,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  infoContainer: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    margin: 16,
+  },
+  infoText: {
+    color: '#fff',
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  retryButton: {
+    backgroundColor: '#e50914',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  episodesSection: {
+    flex: 1,
+    backgroundColor: '#000',
+    paddingTop: 16,
+  },
+  episodesHeader: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  episodesList: {
+    paddingBottom: 16,
+  },
+  episodeContainer: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 16,
@@ -1314,15 +1358,12 @@ skipButtonText: {
     overflow: "hidden",
     padding: 10,
   },
-  episodeMeta: {
-    fontSize: 14,
-    color: "#BBBBBB",
-    marginTop: 4,
+  currentEpisode: {
+    backgroundColor: '#2a2a2a',
+    borderWidth: 2,
+    borderColor: '#e50914',
   },
-  episodesList: {
-    paddingBottom: 16,
-  },
-   episodeThumbnail: {
+  episodeThumbnail: {
     width: "40%",
     height: 100,
     borderRadius: 8,
@@ -1332,45 +1373,36 @@ skipButtonText: {
     marginLeft: 12,
   },
   episodeTitle: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#FFFFFF",
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
   },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
+  episodeMeta: {
+    fontSize: 14,
+    color: "#BBBBBB",
+    marginTop: 4,
   },
-   nextEpisodesHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 10,
+  playingIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 12,
+    padding: 4,
+  },
+  nextEpisodesHeader: {
     marginBottom: 12,
+    padding: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
-   headerLeft: {
-    flex: 1,  // Reduced flex to give more space to headerRight
+  headerLeft: {
+    flex: 1,
     alignItems: 'flex-start',
   },
-  headerControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 15,  // Add spacing between download button and search input
-  },
-  headerRight: {
-    flex: 0.4,  // Increased flex to accommodate both controls
-    alignItems: 'flex-end',
-  },
-
-  nextEpisodesText: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#FFFFFF",
-  },
-   searchInput: {
+  searchInput: {
     backgroundColor: "#333",
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -1378,7 +1410,15 @@ skipButtonText: {
     color: "#fff",
     minWidth: 120,
   },
-    episodeNavigation: {
+  nextEpisodesText: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#FFFFFF",
+  },
+  disabledButton: {
+    backgroundColor: "#555",
+  },
+  episodeNavigation: {
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
@@ -1390,175 +1430,20 @@ skipButtonText: {
     paddingHorizontal: 12,
     borderRadius: 6,
   },
-  disabledButton: {
-    backgroundColor: "#555",
-  },
-   episodeNumberText: {
+  episodeNumberText: {
     color: "#fff",
     fontSize: 16,
     fontWeight: "bold",
     marginLeft: 10,
   },
-    loadingContainer2: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#161616",
-  },
-  loadingGif: {
-    width: 100,
-    height: 100,
-    resizeMode: "contain",
-  },
-   errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
-    height: '100%',
-    width: '100%',
-  },
-  errorImage: {
-    width: '80%',
-    height: '60%',
-    marginBottom: 20,
-  },
-  errorText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  retryButton: {
-    backgroundColor: '#E50914',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-   buttonRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    marginVertical: 12,
-  },
-  button: {
-    backgroundColor: "#E50914",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 4,
-    marginHorizontal: 6,
-  },
-  buttonText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
-   badgeContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 5,
-  },
-  subbedBadge: {
-    backgroundColor: 'rgb(36, 34, 53)',
-  },
-  dubbedBadge: {
-    backgroundColor: 'rgb(36, 34, 53)',
-  },
-  activeBadge: {
-  backgroundColor: '#E50914',  // Red color to match your theme
-  borderWidth: 2,
- },
-   badgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-    playIconOverlayRow: {
-    position: 'absolute',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    width: '110%',
-    top: '40%',
-    gap: 40,
-    zIndex: 10,
-  },
-  rewindOverlay: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fastForwardOverlay: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  rewindIcon: {
-    width: 35,
-    height: 35,
-    tintColor: 'white',
-  },
-  fastForwardIcon: {
-    width: 35,
-    height: 35,
-    tintColor: 'white',
-  },
-    selectedQualityItem: {
-    backgroundColor: '#333', // or whatever style you want for selected items
-    borderColor: '#E50914',
-    borderWidth: 1,
-  },
-  selectedQualityText: {
-    color: '#E50914', // or whatever style you want for the text of selected items
-    fontWeight: 'bold',
-  },
-    selectedQuality: {
-    backgroundColor: '#E50914', // or whatever color you want for selected items
-    borderColor: '#fff',
-    borderWidth: 1,
-  },
-  
-   downloadButton: {
-    backgroundColor: '#E50914',
-    paddingVertical: 7,
-    paddingHorizontal: 5,
-    borderRadius: 6,
+  headerControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    maxWidth: 200, // Ensures button doesn't overflow
+    justifyContent: 'flex-end',
+    gap: 15,
   },
-  downloadButtonText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginLeft: 8,
-  },
- 
- 
-  downloadOption: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 15,
-    paddingHorizontal: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  
-   loadingText: {
-    color: '#ddd',
-    marginTop: 10,
-    fontSize: 16,
-  },
-   noOptionsText: {
-    color: '#ddd',
-    textAlign: 'center',
-    padding: 20,
-    fontSize: 16,
+  headerRight: {
+    flex: 0.4,
+    alignItems: 'flex-end',
   },
 });
-
-export default WatchZoro;

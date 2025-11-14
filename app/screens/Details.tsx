@@ -24,38 +24,94 @@ import {
 } from "../Types/types";
 import { useAnimeId } from "../context/EpisodeContext";
 import { zoroSlug } from "../mapping/zoroSlugMapping";
-import { useBookMarkId  } from "../context/BookmarkContent";
+import { useBookMarkId } from "../context/BookmarkContent";
 import { Ionicons } from '@expo/vector-icons';
 import { useUser } from "../context/UserContext";
 import { supabase } from '../supabase/supabaseClient';
 
-
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
-
-// Define the route type for this screen
 type DetailsScreenRouteProp = RouteProp<RootStackParamList, "Details">;
+
+interface AnimekaiEpisode {
+  id: string;
+  number: number;
+  title: string;
+  image: string;
+  overview?: string;
+  rating?: number;
+}
+
+interface AnimekaiResponse {
+  episodesList: AnimekaiEpisode[];
+}
+
+interface UnifiedProviderEpisode {
+  episodeNumber: number;
+  episodeId: string;
+  title: string;
+  rating?: string;
+  aired: boolean;
+  overview?: string;
+  thumbnail?: string;
+  provider: string;
+}
+
+interface UnifiedProviderResponse {
+  data: {
+    malId: number;
+    anilistId: number;
+    image: string;
+    color?: string;
+    bannerImage?: string;
+    title: {
+      romaji: string;
+      english?: string;
+      native?: string;
+    };
+    trailer?: {
+      id: string;
+      site: string;
+      thumbnail: string;
+    };
+    format: string;
+    status: string;
+    duration?: number;
+    score?: number;
+    genres: string[];
+    episodes: number;
+    synopsis?: string;
+    season?: string;
+    releaseDate?: string;
+    endDate?: string;
+    studio?: string;
+    producers?: string[];
+  };
+  providerEpisodes: UnifiedProviderEpisode[];
+}
 
 const Details = () => {
   const route = useRoute<DetailsScreenRouteProp>();
   const { id } = route.params;
   const { setAnimeId, setEpisodeid } = useAnimeId();
-   const { setbookMarkId } = useBookMarkId ();
-   const { user } = useUser(); // Get user from context
+  const { setbookMarkId } = useBookMarkId();
+  const { user } = useUser();
 
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const [provider, setProvider] = useState("zoro");
   const [zoroId, setZoroId] = useState("");
   const [dub, setDub] = useState("");
   const [item4, setItem4] = useState<BackupResponse | null>(null);
-    const [backupImageUrl, setBackupImageUrl] = useState<string>("");
+  const [backupImageUrl, setBackupImageUrl] = useState<string>("");
   const [HianimeId, setHianimeId] = useState<string>("");
   const [isBookmarked, setIsBookmarked] = useState<boolean>(false);
-  const [notificationOpacity] = useState(new Animated.Value(0)); // Add this for animation
-   const [notificationMessage, setNotificationMessage] = useState('Added to My Playlist');
+  const [notificationOpacity] = useState(new Animated.Value(0));
+  const [notificationMessage, setNotificationMessage] = useState('Added to My Playlist');
   const [notificationIconName, setNotificationIconName] = useState<IoniconsName>('checkmark-circle');
   const [notificationIconColor, setNotificationIconColor] = useState('#4CD964');
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
+  const [animekaiEpisodes, setAnimekaiEpisodes] = useState<AnimekaiEpisode[]>([]);
+  const [unifiedProviderData, setUnifiedProviderData] = useState<UnifiedProviderResponse | null>(null);
 
   const [anime, setAnime] = useState<Anime | null>(null);
   const [anime2, setAnime2] = useState<Anime2 | null>(null);
@@ -63,111 +119,246 @@ const Details = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
-const [isExpanded, setIsExpanded] = useState(false);
-const toggleExpanded = () => setIsExpanded(prev => !prev);
-  const [activeTab, setActiveTab] = useState('description'); // Default tab
-const [mappedZoroId, setMappedZoroId] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
+  const toggleExpanded = () => setIsExpanded(prev => !prev);
+  const [activeTab, setActiveTab] = useState('description');
+  const [mappedZoroId, setMappedZoroId] = useState("");
+  const [animekaiAnimeId, setAnimekaiAnimeId] = useState<string>("");
+  
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
 
-    const months = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
-];
-interface ProviderData {
-  data: {
-    title: {
-      romaji: string;
+  interface ProviderData {
+    data: {
+      title: {
+        romaji: string;
+      };
+      image: string;
+      score: number;
+      status: string;
+      season: string;
+      genres: string[];
+      synopsis: string;
     };
-    image: string;
-    score: number;
-    status: string;
-    season: string;
-    genres: string[];
-    synopsis: string;
-  };
-  provider: {
-    id: string;
-    name: string;
-    provider: string;
-  };
-}
-const tabs = [
-  { key: "description", label: "Description" },
-  { key: "relations",    label: "Relations" },
-  { key: "recommendations", label: "Recommendations" },
-  { key: "characters",   label: "Characters" },
-];
-  // Fetch anime details using the primary API
+    provider: {
+      id: string;
+      name: string;
+      provider: string;
+    };
+  }
+
+  const tabs = [
+    { key: "description", label: "Description" },
+    { key: "relations", label: "Relations" },
+    { key: "recommendations", label: "Recommendations" },
+    { key: "characters", label: "Characters" },
+  ];
+
   const fetchAnimeDetails = async () => {
     try {
-      const response = await axios.get(
-        `https://partyonyou.vercel.app/meta/anilist/info/${id}?provider=${provider}`
-      );
+      if (provider === "animekai" || provider === "allanime" || provider === "anizone" || provider === "animepahe") {
+        const response = await axios.get(
+          `https://panuhak.vercel.app/meta/anilist/info/${id}?provider=zoro`
+        );
 
-      const modifiedAnime = {
-        ...response.data,
-        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
-      };
+        const modifiedAnime = {
+          ...response.data,
+          posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
+          episodes: [],
+        };
 
-      setAnime(modifiedAnime);
- 
-      if (modifiedAnime.episodes) {
-        const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
-          ...episode,
-          episodeid: episode.id,
-        }));
-        setEpisodes(mappedEpisodes);
-      } else {
+        setAnime(modifiedAnime);
         setEpisodes([]);
+      } else {
+        const response = await axios.get(
+          `https://panuhak.vercel.app/meta/anilist/info/${id}?provider=${provider}`
+        );
+
+        const modifiedAnime = {
+          ...response.data,
+          posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
+        };
+
+        setAnime(modifiedAnime);
+
+        if (modifiedAnime.episodes) {
+          const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
+            ...episode,
+            episodeid: episode.id,
+          }));
+          setEpisodes(mappedEpisodes);
+        } else {
+          setEpisodes([]);
+        }
       }
     } catch (err) {
       throw err;
     }
   };
 
-  // Fetch provider details from a backup API
-const fetchProvider = async () => {
-  try {
-    const response = await axios.get(`https://hakai-api.vercel.app/api/anilist/get-provider/${id}`);
+  const formatAnimekaiId = (url: string): string => {
+    if (!url) return '';
+    const parts = url.split('/watch/');
+    const slug = parts[1] || url;
+    return `${slug}-token`;
+  };
 
-    // Store the full response data including the provider data with synopsis
-    setProviderData(response.data);
+  const fetchAnimekaiEpisodes = async () => {
+    try {
+      console.log(`Fetching Animekai data for Anilist ID: ${id}`);
+      
+      const animeTitle = anime?.title?.romaji || anime?.title?.english || providerData?.data?.title?.romaji;
+      
+      if (!animeTitle) {
+        console.log('No anime title available yet, waiting...');
+        return;
+      }
+      
+      console.log(`Searching Animekai with title: ${animeTitle}`);
+      
+      const searchResponse = await axios.get(
+        `https://kenjitsu.vercel.app/api/animekai/anime/search?q=${encodeURIComponent(animeTitle)}`
+      );
+      
+      console.log('Animekai Search Response:', searchResponse.data);
+      
+      const results = searchResponse.data?.data || [];
+      
+      if (results.length === 0) {
+        console.log('No search results found');
+        setAnimekaiEpisodes([]);
+        return;
+      }
+      
+      let matchedAnime = results.find((result: any) => 
+        result.romaji === animeTitle || result.name === animeTitle
+      );
+      
+      if (!matchedAnime && results.length > 0) {
+        matchedAnime = results[0];
+        console.log(`Using first search result: ${matchedAnime.name}`);
+      }
+      
+      if (!matchedAnime) {
+        console.log(`No Animekai anime found for: ${animeTitle}`);
+        setAnimekaiEpisodes([]);
+        return;
+      }
+      
+      const animekaiId = matchedAnime.id;
+      console.log(`Found Animekai anime with ID: ${animekaiId}`);
+      setAnimekaiAnimeId(animekaiId);
+      
+      if (matchedAnime.episodes && Array.isArray(matchedAnime.episodes)) {
+        console.log(`Using episodes from search result: ${matchedAnime.episodes.length} episodes`);
+        setAnimekaiEpisodes(matchedAnime.episodes);
+      } else {
+        await fetchAnimekaiAnimeDetails(animekaiId);
+      }
+    } catch (error) {
+      console.error("Error fetching Animekai data:", error);
+      if (axios.isAxiosError(error)) {
+        console.log('Error details:', {
+          status: error.response?.status,
+          data: error.response?.data,
+          message: error.message
+        });
+      }
+      setAnimekaiEpisodes([]);
+    }
+  };
 
-    // Extract the provider data from the response
-    const providerData = response.data?.provider;
+  const fetchAnimekaiAnimeDetails = async (animekaiId: string) => {
+    try {
+      const animeResponse = await axios.get(
+        `https://kenjitsu.vercel.app/api/animekai/anime/${animekaiId}`
+      );
+      
+      console.log('Animekai Anime Response:', animeResponse.data);
+      
+      const episodes = animeResponse.data?.providerEpisodes || 
+                      animeResponse.data?.data?.episodes || 
+                      animeResponse.data?.episodes;
+      
+      if (episodes && Array.isArray(episodes)) {
+        const mappedEpisodes = episodes.map((ep: any) => ({
+          id: ep.episodeId || ep.id,
+          number: ep.episodeNumber || ep.number,
+          title: ep.title,
+          image: ep.thumbnail || ep.image || anime?.image || providerData?.data?.image,
+          overview: ep.overview,
+          rating: ep.rating
+        }));
+        
+        setAnimekaiEpisodes(mappedEpisodes);
+        console.log(`Fetched ${mappedEpisodes.length} Animekai episodes`);
+      } else {
+        console.log('No episodes found in Animekai response');
+        setAnimekaiEpisodes([]);
+      }
+    } catch (error) {
+      console.error("Error fetching Animekai anime details:", error);
+      setAnimekaiEpisodes([]);
+    }
+  };
 
-    if (providerData?.id) {
-      // Use the provider id as the zoroId
-      setZoroId(providerData.id);
-      console.log(`Provider ID found: ${providerData.id} for anime ${id}`);
-    } else {
-      // If no provider id is found, use the main id as fallback
-      console.log(`No provider ID found for ${id}, using main id as fallback`);
+  const fetchUnifiedProviderData = async (providerType: 'allanime' | 'anizone' | 'animepahe') => {
+    try {
+      console.log(`Fetching ${providerType} data for ID: ${id}`);
+      const response = await axios.get(
+        `https://kenjitsu.vercel.app/api/anilist/episodes/${id}?provider=${providerType}`
+      );
+      
+      console.log(`${providerType} API Response:`, response.data);
+      console.log('Provider Episodes from response:', response.data.providerEpisodes);
+      console.log(`Fetched ${response.data.providerEpisodes?.length || 0} ${providerType} episodes`);
+      
+      setUnifiedProviderData(response.data);
+    } catch (error) {
+      console.error(`Error fetching ${providerType} data:`, error);
+      setUnifiedProviderData(null);
+    }
+  };
+
+  const fetchProvider = async () => {
+    try {
+      const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/mappings/${id}`);
+
+      setProviderData(response.data);
+
+      const providerData = response.data?.provider;
+
+      if (providerData?.id) {
+        setZoroId(providerData.id);
+        console.log(`Provider ID found: ${providerData.id} for anime ${id}`);
+      } else {
+        console.log(`No provider ID found for ${id}, using main id as fallback`);
+        setZoroId(id.toString());
+      }
+
+      if (providerData?.name) {
+        console.log(`Provider name: ${providerData.name}`);
+      }
+
+      if (providerData?.provider) {
+        console.log(`Provider type: ${providerData.provider}`);
+      }
+
+      setError(null);
+    } catch (error) {
+      console.error("Provider API failed", error);
       setZoroId(id.toString());
+      setError("Failed to fetch provider data, using fallback");
     }
+  };
 
-    // You can also store other provider information if needed
-    if (providerData?.name) {
-      console.log(`Provider name: ${providerData.name}`);
-    }
+  const stripHtmlTags = (html: string | null | undefined): string => {
+    if (!html) return '';
+    return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+  };
 
-    if (providerData?.provider) {
-      console.log(`Provider type: ${providerData.provider}`);
-    }
-
-    setError(null);
-  } catch (error) {
-    console.error("Provider API failed", error);
-    // Fallback to using the main id if API fails
-    setZoroId(id.toString());
-    setError("Failed to fetch provider data, using fallback");
-  }
-};
-
-// Function to clean HTML tags from synopsis
-const stripHtmlTags = (html: string | null | undefined): string => {
-  if (!html) return '';
-  return html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
-};
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -190,137 +381,134 @@ const stripHtmlTags = (html: string | null | undefined): string => {
     fetchData();
   }, [id, provider]);
 
-const fetchBackupImage = async () => {
-  try {
-    // Check if there's a mapping for this zoroId
-    const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
-    
-    const response = await axios.get(
-      `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}`
-    );
-    const posterUrl = response.data?.data?.anime?.info?.poster;
-    const hianimeid = response.data?.data?.anime?.info?.id;
-    
-    setBackupImageUrl(posterUrl);
-    setHianimeId(hianimeid);
-  } catch (error) {
-    console.error("Error fetching backup image:", error);
-  } finally {
-    setLoading(false);
-  }
-};
-
-const handleAddBookmark = async (id?: number): Promise<void> => {
-  if (id == null || !user) return; // guard against undefined id and null user
-  
-  // Check if already bookmarked
-  if (isBookmarked) {
-    try {
-      // Remove from bookmarks if already bookmarked
-      const { error } = await supabase
-        .from('playlists')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('episode_id', id);
-      
-      if (error) {
-        console.error('Error removing bookmark:', error);
-        return;
-      }
-      
-      setIsBookmarked(false);
-      setNotificationMessage('Removed from My Playlist');
-      setNotificationIconName('close-circle');
-      setNotificationIconColor('#FF3B30'); // Red color for removal
-    } catch (error) {
-      console.error('Error removing bookmark:', error);
+  useEffect(() => {
+    if (provider === "animekai") {
+      fetchAnimekaiEpisodes();
+    } else if (provider === "allanime" || provider === "anizone" || provider === "animepahe") {
+      fetchUnifiedProviderData(provider);
     }
-  } else {
-    // Add to bookmarks if not already bookmarked
-    setbookMarkId(id);
-    setIsBookmarked(true);
-    setNotificationMessage('Added to My Playlist');
-    setNotificationIconName('checkmark-circle');
-    setNotificationIconColor('#4CD964'); // Green color for success
-  }
-  
-  // Animate the notification appearance
-  Animated.sequence([
-    Animated.timing(notificationOpacity, {
-      toValue: 1,
-      duration: 300,
-      useNativeDriver: true
-    }),
-    Animated.delay(1500),
-    Animated.timing(notificationOpacity, {
-      toValue: 0,
-      duration: 300,
-      useNativeDriver: true
-    })
-  ]).start();
-};
+  }, [provider, id]);
 
-useEffect(() => {
-  const checkIfBookmarked = async () => {
-    if (user && anime?.id) {
+  const fetchBackupImage = async () => {
+    try {
+      const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
+      
+      const response = await axios.get(
+        `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}`
+      );
+      const posterUrl = response.data?.data?.anime?.info?.poster;
+      const hianimeid = response.data?.data?.anime?.info?.id;
+      
+      setBackupImageUrl(posterUrl);
+      setHianimeId(hianimeid);
+    } catch (error) {
+      console.error("Error fetching backup image:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddBookmark = async (id?: number): Promise<void> => {
+    if (id == null || !user) return;
+    
+    if (isBookmarked) {
       try {
-        // Check directly in the Supabase playlists table for the current user and anime
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('playlists')
-          .select('*')
+          .delete()
           .eq('user_id', user.id)
-          .eq('episode_id', anime.id);
+          .eq('episode_id', id);
         
         if (error) {
-          console.error('Error checking bookmark status:', error);
+          console.error('Error removing bookmark:', error);
           return;
         }
         
-        // If we found any records, the anime is bookmarked
-        setIsBookmarked(data && data.length > 0);
+        setIsBookmarked(false);
+        setNotificationMessage('Removed from My Playlist');
+        setNotificationIconName('close-circle');
+        setNotificationIconColor('#FF3B30');
       } catch (error) {
-        console.error('Error checking bookmark status:', error);
+        console.error('Error removing bookmark:', error);
       }
+    } else {
+      setbookMarkId(id);
+      setIsBookmarked(true);
+      setNotificationMessage('Added to My Playlist');
+      setNotificationIconName('checkmark-circle');
+      setNotificationIconColor('#4CD964');
+    }
+    
+    Animated.sequence([
+      Animated.timing(notificationOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true
+      }),
+      Animated.delay(1500),
+      Animated.timing(notificationOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true
+      })
+    ]).start();
+  };
+
+  useEffect(() => {
+    const checkIfBookmarked = async () => {
+      if (user && anime?.id) {
+        try {
+          const { data, error } = await supabase
+            .from('playlists')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('episode_id', anime.id);
+          
+          if (error) {
+            console.error('Error checking bookmark status:', error);
+            return;
+          }
+          
+          setIsBookmarked(data && data.length > 0);
+        } catch (error) {
+          console.error('Error checking bookmark status:', error);
+        }
+      }
+    };
+    
+    checkIfBookmarked();
+  }, [user, anime]);
+
+  const fetchEpisode = async () => {
+    setLoading(true);
+    try {
+      const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
+      
+      const response = await axios.get(
+        `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}/episodes`
+      );
+      setItem4(response.data?.data || null);
+    } catch (error) {
+      console.error("Error fetching episodes:", error);
+      setItem4(null);
+    } finally {
+      setLoading(false);
     }
   };
-  
-  checkIfBookmarked();
-}, [user, anime]);
- 
 
-// Similarly, update your fetchEpisode function:
-const fetchEpisode = async () => {
-  setLoading(true);
-  try {
-    // First check if there's a direct mapping for the anime ID
-    // If available, use the mapped ID, otherwise fall back to zoroId
-    const mappedZoroId = zoroSlug[id] || zoroSlug[zoroId] || zoroId;
-    
-    const response = await axios.get(
-      `https://wazzap-delta.vercel.app/api/v2/hianime/anime/${mappedZoroId}/episodes`
-    );
-    setItem4(response.data?.data || null);
-  } catch (error) {
-    console.error("Error fetching episodes:", error);
-    setItem4(null);
-  } finally {
-    setLoading(false);
-  }
-};
+  useEffect(() => {
+    if (zoroId) {
+      const mapped = zoroSlug[zoroId] || zoroId;
+      setMappedZoroId(mapped);
+    }
+  }, [zoroId]);
 
- useEffect(() => {
-  if (zoroId) {
-    const mapped = zoroSlug[zoroId] || zoroId;
-    setMappedZoroId(mapped);
-  }
-}, [zoroId]);
-
-useEffect(() => {
-  if (mappedZoroId) {
-    fetchEpisode();
-    fetchBackupImage();
-  }
-}, [mappedZoroId]);
+  useEffect(() => {
+    if (mappedZoroId) {
+      fetchEpisode();
+      fetchBackupImage();
+    }
+  }, [mappedZoroId]);
 
   if (loading) {
     return (
@@ -343,7 +531,6 @@ useEffect(() => {
     );
   }
 
-  // Filter episodes
   const filteredEpisodes = episodes
     .filter((episode) => {
       if (!searchQuery) return true;
@@ -361,11 +548,26 @@ useEffect(() => {
           .sort((a, b) => Number(a.number) - Number(b.number))
       : [];
 
+  const filteredAnimekaiEpisodes = animekaiEpisodes
+    .filter((episode) => {
+      if (!searchQuery) return true;
+      return episode.number.toString().includes(searchQuery);
+    })
+    .sort((a, b) => Number(a.number) - Number(b.number));
+
+  const filteredUnifiedEpisodes = unifiedProviderData?.providerEpisodes
+    ? unifiedProviderData.providerEpisodes
+        .filter((episode) => {
+          if (!searchQuery) return true;
+          return episode.episodeNumber.toString().includes(searchQuery);
+        })
+        .sort((a, b) => Number(a.episodeNumber) - Number(b.episodeNumber))
+    : [];
+
   const renderEpisodeItem = ({ item }: { item: Episode }) => {
     return (
       <TouchableOpacity
         style={styles.episodeContainer}
-        
         onPress={() => {
           setEpisodeid(item.episodeid);
           if (provider === "zoro") {
@@ -375,11 +577,9 @@ useEffect(() => {
           } else if (provider === "animekai") {
             navigation.navigate("Animekai");
           }
-                   setAnimeId(id);
-
+          setAnimeId(id);
         }}
       >
-        
         <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
         <View style={styles.episodeTextContainer}>
           <Text style={styles.episodeTitle}>Episode {item.number}</Text>
@@ -397,11 +597,9 @@ useEffect(() => {
       <TouchableOpacity
         style={styles.episodeContainer}
         onPress={() => {
-          const formattedEpisodeId = item.episodeId
-        
+          const formattedEpisodeId = item.episodeId;
           setEpisodeid(formattedEpisodeId);
-                  setAnimeId(mappedZoroId);
-
+          setAnimeId(mappedZoroId);
           navigation.navigate("Zoro");
         }}
       >
@@ -422,11 +620,79 @@ useEffect(() => {
     );
   };
 
-  // Define provider options (removed anicrush)
+  const renderAnimekaiEpisodeItem = ({ item }: { item: AnimekaiEpisode }) => {
+    return (
+      <TouchableOpacity
+        style={styles.episodeContainer}
+        onPress={() => {
+         setEpisodeid(item.id);
+          setAnimeId(animekaiAnimeId || id);
+          navigation.navigate("Animekai");
+          console.log("wamuz", item.id);
+          console.log("cruz", animekaiAnimeId || id)
+        }}
+      >
+        <Image
+          source={{
+            uri: item.image || anime?.image || providerData?.data?.image || "https://via.placeholder.com/150",
+          }}
+          style={styles.episodeThumbnail}
+        />
+        <View style={styles.episodeTextContainer}>
+          <Text style={styles.episodeTitle}>Episode {item.number}</Text>
+          <Text style={styles.episodeTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          {item.rating && (
+            <Text style={styles.episodeMeta}>Rating: {item.rating}%</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderUnifiedEpisodeItem = ({ item }: { item: UnifiedProviderEpisode }) => {
+    const navigationMap = {
+      'allanime': 'Allanime',
+      'anizone': 'Anizone',
+      'animepahe': 'Animepahe'
+    };
+
+    return (
+      <TouchableOpacity
+        style={styles.episodeContainer}
+        onPress={() => {
+          setEpisodeid(item.episodeId);
+          setAnimeId(id);
+          navigation.navigate(navigationMap[provider as keyof typeof navigationMap] as any);
+          console.log(`${provider} Episode ID:`, item.episodeId);
+        }}
+      >
+        <Image
+          source={{
+            uri: item.thumbnail || unifiedProviderData?.data?.image || anime?.image || "https://via.placeholder.com/150",
+          }}
+          style={styles.episodeThumbnail}
+        />
+        <View style={styles.episodeTextContainer}>
+          <Text style={styles.episodeTitle}>Episode {item.episodeNumber}</Text>
+          <Text style={styles.episodeTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          {item.rating && (
+            <Text style={styles.episodeMeta}>Rating: {item.rating}</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const providerOptions = [
     { label: "Animepahe", value: "animepahe" },
     { label: "Zoro", value: "zoro" },
     { label: "Animekai", value: "animekai" },
+    { label: "Allanime", value: "allanime" },
+    { label: "Anizone", value: "anizone" },
   ];
 
   return (
@@ -441,7 +707,7 @@ useEffect(() => {
       >
         <View style={styles.imageContainer}>
           <Image
-            source={{ uri: anime?.image || anime2?.coverImage?.large  || providerData?.data?.image}}
+            source={{ uri: unifiedProviderData?.data?.image || anime?.image || anime2?.coverImage?.large || providerData?.data?.image }}
             style={styles.image}
           />
           <LinearGradient
@@ -451,89 +717,54 @@ useEffect(() => {
         </View>
         <View style={styles.textContainer}>
           <Text style={styles.title}>
-            {anime?.title?.romaji || providerData?.data?.title?.romaji}
+            {unifiedProviderData?.data?.title?.romaji || anime?.title?.romaji || providerData?.data?.title?.romaji}
           </Text>
-                             <View style={styles.metadata}>
-               <Text style={styles.metadataText}>Rating: {anime?.rating || providerData?.data?.score}%</Text>
-                  <Text style={styles.metadataText}>Status: {anime?.status || providerData?.data?.status}</Text>
-                <Text style={styles.metadataText}>Season: {anime?.season || providerData?.data?.season}</Text>
-                 
-
-        </View>
-            <View style={styles.metadata}>
-
-                    <Text style={styles.metadataText}>{anime?.genres.join(", ") || providerData?.data?.genres.join(", ")}</Text>
-                    </View>
-                                               <View style={styles.metadata}>
-
-<Text style={styles.metadataText}>
-  Started Date:{" "}
-  {anime?.startIn
-    ? `${anime?.startIn?.year || ''} ${
-        months[anime?.startIn?.month - 1] || ''
-      } ${anime?.startIn?.day || ''}`
-    : anime?.startDate
-    ? `${anime?.startDate?.year || ''} ${
-        months[anime?.startDate?.month - 1] || ''
-      } ${anime?.startDate?.day || ''}`
-    : ''}
-</Text>
-<Text style={styles.metadataText}>End Date:{" "}
-   {anime?.endIn
-    ? `${anime?.endIn?.year || ''} ${
-        months[anime?.endIn?.month - 1] || ''
-      } ${anime?.endIn?.day || ''}`
-    : anime?.endDate
-    ? `${anime?.endDate?.year || ''} ${
-        months[anime?.endDate?.month - 1] || ''
-      } ${anime?.endDate?.day || ''}`
-    : ''}
-</Text>
-</View>
-                 
- 
+          <View style={styles.metadata}>
+            <Text style={styles.metadataText}>Rating: {unifiedProviderData?.data?.score || anime?.rating || providerData?.data?.score}%</Text>
+            <Text style={styles.metadataText}>Status: {unifiedProviderData?.data?.status || anime?.status || providerData?.data?.status}</Text>
+            <Text style={styles.metadataText}>Season: {unifiedProviderData?.data?.season || anime?.season || providerData?.data?.season}</Text>
+          </View>
+          <View style={styles.metadata}>
+            <Text style={styles.metadataText}>
+              {unifiedProviderData?.data?.genres?.join(", ") || anime?.genres.join(", ") || providerData?.data?.genres.join(", ")}
+            </Text>
+          </View>
+          <View style={styles.metadata}>
+            <Text style={styles.metadataText}>
+              Started Date:{" "}
+              {anime?.startIn
+                ? `${anime?.startIn?.year || ''} ${months[anime?.startIn?.month - 1] || ''} ${anime?.startIn?.day || ''}`
+                : anime?.startDate
+                ? `${anime?.startDate?.year || ''} ${months[anime?.startDate?.month - 1] || ''} ${anime?.startDate?.day || ''}`
+                : unifiedProviderData?.data?.releaseDate || ''}
+            </Text>
+            <Text style={styles.metadataText}>End Date:{" "}
+              {anime?.endIn
+                ? `${anime?.endIn?.year || ''} ${months[anime?.endIn?.month - 1] || ''} ${anime?.endIn?.day || ''}`
+                : anime?.endDate
+                ? `${anime?.endDate?.year || ''} ${months[anime?.endDate?.month - 1] || ''} ${anime?.endDate?.day || ''}`
+                : unifiedProviderData?.data?.endDate || ''}
+            </Text>
+          </View>
         </View>
         
         <Animated.View 
-        style={[
-          styles.notificationContainer, 
-          { opacity: notificationOpacity }
-        ]}
-      >
-        <View style={styles.notificationContent}>
-          <Ionicons name="checkmark-circle" size={20} color="#4CD964" />
-          <Text style={styles.notificationText}>Added to My Playlist</Text>
-        </View>
-      </Animated.View>
+          style={[
+            styles.notificationContainer, 
+            { opacity: notificationOpacity }
+          ]}
+        >
+          <View style={styles.notificationContent}>
+            <Ionicons name={notificationIconName} size={20} color={notificationIconColor} />
+            <Text style={styles.notificationText}>{notificationMessage}</Text>
+          </View>
+        </Animated.View>
 
-      {/* Existing UI */}
-      <LinearGradient
-        colors={[
-          "#161616",
-          "rgba(22, 22, 22, 0.9)",
-          "rgba(22, 22, 22, 0.8)",
-        ]}
-        style={styles.gradient}
-      >
-
-      </LinearGradient>
-      <Animated.View 
-  style={[
-    styles.notificationContainer, 
-    { opacity: notificationOpacity }
-  ]}
->
-  <View style={styles.notificationContent}>
-    <Ionicons name={notificationIconName} size={20} color={notificationIconColor} />
-    <Text style={styles.notificationText}>{notificationMessage}</Text>
-  </View>
-</Animated.View>
-      {user && (
+        {user && (
           <TouchableOpacity
             onPress={() => {
               const animeId = anime?.id;
               if (animeId !== undefined) {
-                // Ensure we're passing a number to the handler
                 handleAddBookmark(typeof animeId === 'string' ? Number(animeId) : animeId);
               }
             }}
@@ -546,142 +777,140 @@ useEffect(() => {
             />
           </TouchableOpacity>
         )}
-   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
-  {tabs.map((tab) => {
-    const isActive = activeTab === tab.key;
-    return (
-      <TouchableOpacity
-        key={tab.key}
-        onPress={() => setActiveTab(tab.key)}
-        style={[
-          styles.tabButton,
-          isActive && styles.activeTabButton
-        ]}
-      >
-        <Text
-          style={[
-            styles.tabText,
-            isActive && styles.activeTabText
-          ]}
-        >
-          {tab.label}
-        </Text>
-      </TouchableOpacity>
-    );
-  })}
-</ScrollView>
 
-{activeTab === 'description' && (
-  <View style={styles.descriptionContainer}>
-    <Text
-      style={styles.description}
-      numberOfLines={isExpanded ? undefined : 4}
-      ellipsizeMode="tail"
-    >
-      {/* First try to get synopsis from provider data, then fallback to description */}
-      {stripHtmlTags(providerData?.data?.synopsis) || 
-       anime?.description || 
-       anime2?.description || 
-       'No description available'}
-    </Text>
-    <TouchableOpacity onPress={toggleExpanded}>
-      <Text style={styles.readMore}>
-        {isExpanded ? "Read Less" : "Read More"}
-      </Text>
-    </TouchableOpacity>
-  </View>
-)}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                onPress={() => setActiveTab(tab.key)}
+                style={[
+                  styles.tabButton,
+                  isActive && styles.activeTabButton
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    isActive && styles.activeTabText
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
 
-{/* Recommendations Tab Content */}
-{activeTab === 'recommendations' && (
-  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-    {(anime?.results || anime?.recommendations)?.map((recommendation) => (
-      <TouchableOpacity
-        key={recommendation?.id}
-        style={styles.relation}
-        onPress={() => navigation.navigate('Details', { id: recommendation?.id })}
-      >
-        <Image
-          source={{ uri: recommendation?.coverImage?.large || recommendation?.image }}
-          style={styles.bitch}
-        />
-        <Text
-          style={[styles.episodeTitle, { width: 120 }]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {recommendation?.title?.romaji}
-        </Text>
-      </TouchableOpacity>
-    ))}
-  </ScrollView>
-)}
-
-{/* Relations Tab Content */}
-{activeTab === 'relations' && (
-  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-    {(anime?.relation || anime?.relations)
-      ?.filter(relation => (relation?.format === 'TV' || relation?.type === 'TV' || relation?.format === 'MOVIE' || relation?.type === 'MOVIE'))
-      ?.map((relation) => (
-        <TouchableOpacity
-          key={relation?.id}
-          style={styles.relation}
-          onPress={() => navigation.navigate('Details', { id: relation?.id })}
-        >
-          <Image
-            source={{ uri: relation?.coverImage?.large || relation?.image }}
-            style={styles.bitch}
-          />
-          <View style={styles.textContainer}>
-            <Text style={styles.episodeTitle}>Status: {relation?.status}</Text>
+        {activeTab === 'description' && (
+          <View style={styles.descriptionContainer}>
             <Text
-              style={[styles.episodeTitle, { width: 120 }]}
-              numberOfLines={1}
+              style={styles.description}
+              numberOfLines={isExpanded ? undefined : 4}
               ellipsizeMode="tail"
             >
-              {relation?.title?.romaji}
+              {stripHtmlTags(unifiedProviderData?.data?.synopsis) ||
+               stripHtmlTags(providerData?.data?.synopsis) || 
+               anime?.description || 
+               anime2?.description || 
+               'No description available'}
             </Text>
+            <TouchableOpacity onPress={toggleExpanded}>
+              <Text style={styles.readMore}>
+                {isExpanded ? "Read Less" : "Read More"}
+              </Text>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      ))}
-  </ScrollView>
-)}
+        )}
 
-{/* Characters Tab Content */}
-{activeTab === 'characters' && (
-  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-    {anime?.characters?.map((character) => (
-      <TouchableOpacity
-        key={character?.id}
-      >
-        <Image
-          source={{ uri: character?.image }}
-          style={styles.bitch}
-        />
-        <View style={styles.textContainer}>
-          <Text style={styles.episodeTitle}>{character?.name?.full}</Text>
-        </View>
-      </TouchableOpacity>
-    ))}
-  </ScrollView>
-)}
+        {activeTab === 'recommendations' && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {(anime?.results || anime?.recommendations)?.map((recommendation) => (
+              <TouchableOpacity
+                key={recommendation?.id}
+                style={styles.relation}
+                onPress={() => navigation.navigate('Details', { id: recommendation?.id })}
+              >
+                <Image
+                  source={{ uri: recommendation?.coverImage?.large || recommendation?.image }}
+                  style={styles.bitch}
+                />
+                <Text
+                  style={[styles.episodeTitle, { width: 120 }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {recommendation?.title?.romaji}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+
+        {activeTab === 'relations' && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {(anime?.relation || anime?.relations)
+              ?.filter(relation => (relation?.format === 'TV' || relation?.type === 'TV' || relation?.format === 'MOVIE' || relation?.type === 'MOVIE'))
+              ?.map((relation) => (
+                <TouchableOpacity
+                  key={relation?.id}
+                  style={styles.relation}
+                  onPress={() => navigation.navigate('Details', { id: relation?.id })}
+                >
+                  <Image
+                    source={{ uri: relation?.coverImage?.large || relation?.image }}
+                    style={styles.bitch}
+                  />
+                  <View style={styles.textContainer}>
+                    <Text style={styles.episodeTitle}>Status: {relation?.status}</Text>
+                    <Text
+                      style={[styles.episodeTitle, { width: 120 }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {relation?.title?.romaji}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+          </ScrollView>
+        )}
+
+        {activeTab === 'characters' && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {anime?.characters?.map((character) => (
+              <TouchableOpacity key={character?.id}>
+                <Image
+                  source={{ uri: character?.image }}
+                  style={styles.bitch}
+                />
+                <View style={styles.textContainer}>
+                  <Text style={styles.episodeTitle}>{character?.name?.full}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
       </LinearGradient>
-       <View style={styles.dropdownContainer}>
+
+      <View style={styles.dropdownContainer}>
         <Text style={styles.dropdownLabel}>Select Server:</Text>
-      <Dropdown
-  style={styles.dropdown}
-  data={providerOptions}
-  labelField="label"
-  valueField="value"
-  placeholder="Select Provider"
-  value={provider}
-  onChange={(item) => {
-    setProvider(item.value);
-  }}
-  placeholderStyle={styles.dropdownPlaceholder}
-  selectedTextStyle={styles.dropdownText}
-/>
+        <Dropdown
+          style={styles.dropdown}
+          data={providerOptions}
+          labelField="label"
+          valueField="value"
+          placeholder="Select Provider"
+          value={provider}
+          onChange={(item) => {
+            setProvider(item.value);
+          }}
+          placeholderStyle={styles.dropdownPlaceholder}
+          selectedTextStyle={styles.dropdownText}
+        />
       </View>
+
       <View style={styles.nextEpisodesHeader}>
         <Text style={styles.nextEpisodesText}>Episodes</Text>
         <TextInput
@@ -694,41 +923,52 @@ useEffect(() => {
         />
       </View>
 
-    {provider === "zoro" && (
-  <FlatList
-    data={filteredBackupEpisodes}
-    renderItem={renderBackupEpisodeItem}
-    keyExtractor={(item) => item.episodeId}
-    scrollEnabled={false}
-    contentContainerStyle={styles.episodesList}
-  />
-)}
+      {/* Render episodes based on provider */}
+      {provider === "zoro" && (
+        <FlatList
+          data={filteredBackupEpisodes}
+          renderItem={renderBackupEpisodeItem}
+          keyExtractor={(item) => item.episodeId}
+          scrollEnabled={false}
+          contentContainerStyle={styles.episodesList}
+        />
+      )}
 
-{/* For other providers (animepahe, animekai) */}
-{provider !== "zoro" && (
-  filteredEpisodes.length > 0 ? (
-    <FlatList
-      data={filteredEpisodes}
-      renderItem={renderEpisodeItem}
-      keyExtractor={(item) => item.episodeid}
-      scrollEnabled={false}
-      contentContainerStyle={styles.episodesList}
-    />
-  ) : (
-    filteredBackupEpisodes.length > 0 && (
-      <FlatList
-        data={filteredBackupEpisodes}
-        renderItem={renderBackupEpisodeItem}
-        keyExtractor={(item) => item.episodeId}
-        scrollEnabled={false}
-        contentContainerStyle={styles.episodesList}
-      />
-    )
-  )
-)}
-        
-          
-      
+      {provider === "animekai" && (
+        filteredAnimekaiEpisodes.length > 0 ? (
+          <FlatList
+            data={filteredAnimekaiEpisodes}
+            renderItem={renderAnimekaiEpisodeItem}
+            keyExtractor={(item) => item.id}
+            scrollEnabled={false}
+            contentContainerStyle={styles.episodesList}
+          />
+        ) : (
+          <View style={styles.noEpisodesContainer}>
+            <Text style={styles.noEpisodesText}>
+              {loading ? "Loading episodes..." : "No episodes available for Animekai"}
+            </Text>
+          </View>
+        )
+      )}
+
+      {(provider === "allanime" || provider === "anizone" || provider === "animepahe") && (
+        filteredUnifiedEpisodes.length > 0 ? (
+          <FlatList
+            data={filteredUnifiedEpisodes}
+            renderItem={renderUnifiedEpisodeItem}
+            keyExtractor={(item) => item.episodeId}
+            scrollEnabled={false}
+            contentContainerStyle={styles.episodesList}
+          />
+        ) : (
+          <View style={styles.noEpisodesContainer}>
+            <Text style={styles.noEpisodesText}>
+              {loading ? "Loading episodes..." : `No episodes available for ${provider}`}
+            </Text>
+          </View>
+        )
+      )}
     </ScrollView>
   );
 };
@@ -760,11 +1000,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     color: "#pin",
   },
-    dropdownPlaceholder: {
-    color: "#fff", // Set placeholder text color to white
+  dropdownPlaceholder: {
+    color: "#fff",
   },
   dropdownText: {
-    color: "#fff", // Set selected text color to white
+    color: "#fff",
   },
   logContainer: {
     padding: 10,
@@ -891,7 +1131,7 @@ const styles = StyleSheet.create({
   },
   activeTabButton: {
     borderBottomWidth: 3,
-    borderBottomColor: "#DB202C",  // your accent color
+    borderBottomColor: "#DB202C",
   },
   tabText: {
     fontSize: 14,
@@ -900,33 +1140,35 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: "#fff",
   },
- 
   readMore: {
-  color: "#1E90FF",
-  marginTop: 4,
-  fontSize: 14,
-  textAlign: "center",
-},
-  descriptionContainer: { paddingHorizontal: 10, marginVertical: 10 },
+    color: "#1E90FF",
+    marginTop: 4,
+    fontSize: 14,
+    textAlign: "center",
+  },
+  descriptionContainer: { 
+    paddingHorizontal: 10, 
+    marginVertical: 10 
+  },
   metadata: {
-  flexDirection: 'row', // Horizontal layout
-  justifyContent: 'center', // Center items horizontally
-  alignItems: 'center', // Center items vertically
-  marginVertical: 10, // Add spacing around the section
-},
-   metadataText: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  metadataText: {
     color: '#fff',
     marginHorizontal: 5,
     textAlign: 'center',
   },
-    relation: {
-     alignItems: 'center',
+  relation: {
+    alignItems: 'center',
     marginBottom: 10,
-     borderRadius: 10,
+    borderRadius: 10,
     padding: 10,
   },
-    bitch:{
-   width: 150,
+  bitch: {
+    width: 150,
     height: 200,
     borderRadius: 10,
     marginRight: 10,
@@ -941,7 +1183,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     pointerEvents: 'none',
   },
-  
   notificationContent: {
     backgroundColor: 'rgba(22, 22, 22, 0.9)',
     paddingVertical: 10,
@@ -959,11 +1200,20 @@ const styles = StyleSheet.create({
     shadowRadius: 3.84,
     elevation: 5,
   },
-  
   notificationText: {
     color: '#FFFFFF',
     marginLeft: 8,
     fontWeight: '500',
+  },
+  noEpisodesContainer: {
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noEpisodesText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
   },
 });
 

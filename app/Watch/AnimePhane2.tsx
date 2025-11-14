@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, StatusBar, Alert, ActivityIndicator, Pressable } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, StatusBar, Alert, ActivityIndicator, Pressable, FlatList, Image, ScrollView, TextInput, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -9,7 +9,7 @@ import { useRoute, RouteProp } from "@react-navigation/native";
 import { Anime, RootStackParamList, Episode, BackupResponse } from "../Types/types";
 import { Ionicons } from "@expo/vector-icons";
 
-import { useAnimeId } from "../context/EpisodeContext"; // adjust path as needed
+import { useAnimeId } from "../context/EpisodeContext";
 import * as NavigationBar from "expo-navigation-bar";
 import { useNavigation } from "@react-navigation/native";
 import { StackNavigationProp } from "@react-navigation/stack";
@@ -21,15 +21,32 @@ interface VideoSource {
   isDub: boolean;
 }
 
+interface WebViewMessage {
+  type: 'status' | 'buffering' | 'ready' | 'error' | 'tap' | 'autoplay_blocked';
+  currentTime?: number;
+  duration?: number;
+  paused?: boolean;
+  buffering?: boolean;
+  isBuffering?: boolean;
+  message?: string;
+}
+
+interface WebViewCommand {
+  type: 'seek' | 'play' | 'pause' | 'seekForward' | 'seekBackward' | 'setQuality' | 'reload';
+  time?: number;
+  seconds?: number;
+  level?: number;
+}
+
 type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Animepahe">;
 
 export default function ImprovedHLSWebViewPlayer() {
-  // Fix: Add proper type to webViewRef
   const webViewRef = useRef<WebView>(null);
   const { episodeid, animeId, setAnimeId, setEpisodeid } = useAnimeId();
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
-    const [controlsVisible, setControlsVisible] = useState(true);
-    const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
   
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -41,11 +58,18 @@ export default function ImprovedHLSWebViewPlayer() {
   const [sources, setSources] = useState<VideoSource[]>([]);
   const [selectedQuality, setSelectedQuality] = useState("");
   const [videoSource, setVideoSource] = useState("");
-  const [showQualityOptions, setShowQualityOptions] = useState(false);
+  const [pickerVisible, setPickerVisible] = useState(false);
   
-  // Fix: Add proper type to controlsTimerRef and bufferingTimerRef
+  // Episodes state
+  const [anime, setAnime] = useState<Anime | null>(null);
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [episodeLoading, setEpisodeLoading] = useState(false);
+  
   const controlsTimerRef = useRef<NodeJS.Timeout | null>(null);
   const bufferingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
+  const [filteredEpisodes, setFilteredEpisodes] = useState<Episode[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const resetControlsTimer = () => {
     if (controlsTimeoutRef.current) {
@@ -54,8 +78,9 @@ export default function ImprovedHLSWebViewPlayer() {
     
     controlsTimeoutRef.current = setTimeout(() => {
       setControlsVisible(false);
-    }, 3000); // Hide controls after 3 seconds of inactivity
+    }, 3000);
   };
+
   useEffect(() => {
     if (controlsVisible) {
       resetControlsTimer();
@@ -71,33 +96,28 @@ export default function ImprovedHLSWebViewPlayer() {
   const fetchVideoData = async () => {
     try {
       setIsReady(false);
-      const response = await axios.get(`https://kangaroo-kappa.vercel.app/anime/animepahe/watch?episodeId=${episodeid}`, {
-        timeout: 10000 // 10 second timeout
+      const response = await axios.get(`https://panuhak.vercel.app/anime/animepahe/watch?episodeId=${episodeid}`, {
+        timeout: 10000
       });
       const json = response.data;
       
       if (json.sources && json.sources.length > 0) {
-        // Add proxy URL to each source with proper URL encoding
-        const proxyUrl = "https://hls.shrina.dev/proxy/";
+        // Updated proxy URL
+        const proxyUrl = "https://cors.shrina.dev/proxy?url=";
         const modifiedSources = json.sources.map((source: VideoSource) => ({
           ...source,
           url: `${proxyUrl}${encodeURIComponent(source.url)}`
         }));
         
-        // Store all sources with proxy URLs
         setSources(modifiedSources);
         
-        // Find the highest quality non-dubbed source as default
-        // Sort by quality (assuming higher quality has "1080p" in it)
         const sortedSources = [...modifiedSources].sort((a, b) => {
-          // Prioritize BD sources
           const aHasBD = a.quality.includes("BD");
           const bHasBD = b.quality.includes("BD");
           
           if (aHasBD && !bHasBD) return -1;
           if (!aHasBD && bHasBD) return 1;
           
-          // Then prioritize by resolution
           const aRes = a.quality.includes("1080p") ? 3 : 
                       a.quality.includes("720p") ? 2 : 
                       a.quality.includes("480p") ? 1 : 0;
@@ -108,10 +128,7 @@ export default function ImprovedHLSWebViewPlayer() {
           return bRes - aRes;
         });
         
-        // Filter for non-dubbed sources only
         const nonDubbed = sortedSources.filter(src => !src.isDub);
-        
-        // Select the first (highest quality) non-dubbed source, or fall back to first source
         const defaultSource = nonDubbed.length > 0 ? nonDubbed[0] : sortedSources[0];
         
         setVideoSource(defaultSource.url);
@@ -124,6 +141,29 @@ export default function ImprovedHLSWebViewPlayer() {
         "Failed to load video. Please check your internet connection and try again.",
         [{ text: "OK" }]
       );
+    } finally {
+      setEpisodeLoading(false);
+    }
+  };
+
+  const fetchAnimeDetails = async () => {
+    try {
+      const response = await axios.get(`https://dagkot.vercel.app/meta/anilist/info/${animeId}?provider=animepahe`);
+      const modifiedAnime = {
+        ...response.data,
+        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
+      };
+      setAnime(modifiedAnime);
+      setAnimeId(modifiedAnime.id);
+      if (modifiedAnime.episodes) {
+        const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
+          ...episode,
+          episodeid: episode.id,
+        }));
+        setEpisodes(mappedEpisodes);
+      }
+    } catch (err) {
+      console.error("Error fetching anime details:", err);
     }
   };
   
@@ -132,8 +172,13 @@ export default function ImprovedHLSWebViewPlayer() {
       fetchVideoData();
     }
   }, [episodeid]);
+
+  useEffect(() => {
+    if (animeId) {
+      fetchAnimeDetails();
+    }
+  }, [animeId]);
   
-  // HTML for WebView-based player with improved HLS.js configuration
   const webViewHtml = `
     <!DOCTYPE html>
     <html>
@@ -165,7 +210,7 @@ export default function ImprovedHLSWebViewPlayer() {
           top: 50%;
           left: 50%;
           transform: translate(-50%, -50%);
-          color: white;
+          color: red;
           font-family: Arial, sans-serif;
           background: rgba(0,0,0,0.7);
           padding: 10px 20px;
@@ -195,7 +240,6 @@ export default function ImprovedHLSWebViewPlayer() {
       <div id="error" class="hidden"></div>
       
       <script>
-        // Initialize variables
         let isPlayerReady = false;
         let hls = null;
         let retryCount = 0;
@@ -208,37 +252,33 @@ export default function ImprovedHLSWebViewPlayer() {
           const errorDiv = document.getElementById('error');
           const hlsUrl = "${videoSource}";
           
-          // Function to send message to React Native
           function sendToReactNative(message) {
             window.ReactNativeWebView.postMessage(JSON.stringify(message));
           }
           
           function setupHls() {
             if (Hls.isSupported()) {
-              // Clean up existing HLS instance if any
               if (hls) {
                 hls.destroy();
                 hls = null;
               }
               
-              // Create optimized HLS configuration
               hls = new Hls({
                 debug: false,
                 enableWorker: true,
-                fragLoadingTimeOut: 20000,        // Increased timeout (20s)
-                manifestLoadingTimeOut: 20000,    // Increased timeout (20s)
-                fragLoadingMaxRetry: 4,           // More retries for fragments
-                manifestLoadingMaxRetry: 4,       // More retries for manifest
-                levelLoadingTimeOut: 20000,       // Increased timeout for levels
-                abrEwmaDefaultEstimate: 5000000,  // Higher initial bitrate estimate (5Mbps)
-                startLevel: -1,                   // Auto start level
-                maxBufferLength: 30,              // Reduced buffer for faster seeking
-                maxBufferSize: 15 * 1000 * 1000,  // 15MB buffer size
-                maxMaxBufferLength: 60,           // Maximum 60s buffer
-                liveSyncDurationCount: 3          // Sync with 3 segments
+                fragLoadingTimeOut: 20000,
+                manifestLoadingTimeOut: 20000,
+                fragLoadingMaxRetry: 4,
+                manifestLoadingMaxRetry: 4,
+                levelLoadingTimeOut: 20000,
+                abrEwmaDefaultEstimate: 5000000,
+                startLevel: -1,
+                maxBufferLength: 30,
+                maxBufferSize: 15 * 1000 * 1000,
+                maxMaxBufferLength: 60,
+                liveSyncDurationCount: 3
               });
               
-              // Error handling
               hls.on(Hls.Events.ERROR, function(event, data) {
                 console.log('HLS error:', data);
                 if (data.fatal) {
@@ -284,26 +324,21 @@ export default function ImprovedHLSWebViewPlayer() {
                 }
               });
               
-              // Load the source
               errorDiv.classList.add('hidden');
               loading.classList.remove('hidden');
               hls.loadSource(hlsUrl);
               hls.attachMedia(video);
               
-              // When manifest is parsed, we're ready to play
               hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
                 console.log('Manifest parsed, levels:', data.levels.length);
                 loading.classList.add('hidden');
                 
-                // Auto-select quality based on bandwidth
-                hls.loadLevel = -1; // Auto level
+                hls.loadLevel = -1;
                 
-                // Try to play
                 video.play().then(() => {
                   console.log('Playback started successfully');
                 }).catch(e => {
                   console.error('Autoplay blocked:', e);
-                  // Show play button or user interaction required message
                   sendToReactNative({
                     type: 'autoplay_blocked'
                   });
@@ -312,14 +347,12 @@ export default function ImprovedHLSWebViewPlayer() {
                 isPlayerReady = true;
                 retryCount = 0;
                 
-                // Tell React Native the player is ready
                 sendToReactNative({
                   type: 'ready',
                   duration: video.duration || 0,
                   levels: data.levels.length
                 });
                 
-                // Start status update interval (reduced frequency)
                 setInterval(function() {
                   if (isPlayerReady) {
                     sendToReactNative({
@@ -333,10 +366,9 @@ export default function ImprovedHLSWebViewPlayer() {
                       currentLevel: hls.currentLevel
                     });
                   }
-                }, 500); // Update every 500ms instead of 250ms
+                }, 500);
               });
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-              // Native HLS support (iOS Safari)
               loading.classList.remove('hidden');
               video.src = hlsUrl;
               
@@ -350,7 +382,6 @@ export default function ImprovedHLSWebViewPlayer() {
                   duration: video.duration || 0
                 });
                 
-                // Start status update interval
                 setInterval(function() {
                   sendToReactNative({
                     type: 'status',
@@ -387,7 +418,6 @@ export default function ImprovedHLSWebViewPlayer() {
             }
           }
           
-          // Handle buffering events with improved detection
           let bufferingTimeout;
           
           video.addEventListener('waiting', function() {
@@ -397,7 +427,7 @@ export default function ImprovedHLSWebViewPlayer() {
                 type: 'buffering',
                 isBuffering: true
               });
-            }, 300); // Small delay to avoid flickering
+            }, 300);
           });
           
           video.addEventListener('canplay', function() {
@@ -416,7 +446,6 @@ export default function ImprovedHLSWebViewPlayer() {
             });
           });
           
-          // Setup HLS player when URL is available
           if (hlsUrl) {
             setupHls();
           } else {
@@ -425,7 +454,6 @@ export default function ImprovedHLSWebViewPlayer() {
             loading.classList.add('hidden');
           }
           
-          // Handle messages from React Native
           window.addEventListener('message', function(event) {
             try {
               const message = JSON.parse(event.data);
@@ -476,7 +504,6 @@ export default function ImprovedHLSWebViewPlayer() {
             }
           });
           
-          // Handle video taps with improved detection
           let touchStartTime = 0;
           let touchStartX = 0;
           let touchStartY = 0;
@@ -491,7 +518,6 @@ export default function ImprovedHLSWebViewPlayer() {
             const touchEndTime = Date.now();
             const touchDuration = touchEndTime - touchStartTime;
             
-            // Only consider it a tap if it's short (less than 300ms)
             if (touchDuration < 300) {
               sendToReactNative({
                 type: 'tap'
@@ -499,7 +525,6 @@ export default function ImprovedHLSWebViewPlayer() {
             }
           });
           
-          // Handle clicks for desktop testing
           document.addEventListener('click', function() {
             sendToReactNative({
               type: 'tap'
@@ -510,10 +535,40 @@ export default function ImprovedHLSWebViewPlayer() {
     </body>
     </html>
   `;
-  
-  // Effect for auto-hiding controls
+
   useEffect(() => {
-    // Reset the timer when controls are shown
+    if (episodes.length > 0 && episodeid) {
+      const episode = episodes.find(ep => ep.episodeid === episodeid);
+      setCurrentEpisode(episode || null);
+      
+      setFilteredEpisodes(episodes);
+      
+      const index = episodes.findIndex(ep => ep.episodeid === episodeid);
+      setCurrentIndex(index >= 0 ? index : 0);
+    }
+  }, [episodeid, episodes]);
+
+  const handlePreviousEpisode = () => {
+    if (currentIndex > 0 && episodes.length > 0) {
+      const previousEpisode = episodes[currentIndex - 1];
+      if (previousEpisode) {
+        setEpisodeLoading(true);
+        setEpisodeid(previousEpisode.episodeid);
+      }
+    }
+  };
+
+  const handleNextEpisode = () => {
+    if (currentIndex < episodes.length - 1 && episodes.length > 0) {
+      const nextEpisode = episodes[currentIndex + 1];
+      if (nextEpisode) {
+        setEpisodeLoading(true);
+        setEpisodeid(nextEpisode.episodeid);
+      }
+    }
+  };
+
+  useEffect(() => {
     if (showControls) {
       if (controlsTimerRef.current) {
         clearTimeout(controlsTimerRef.current);
@@ -531,10 +586,8 @@ export default function ImprovedHLSWebViewPlayer() {
     };
   }, [showControls, isReady]);
   
-  // Reset buffering state if stuck
   useEffect(() => {
     if (isBuffering) {
-      // If buffering persists for more than 15 seconds, try to recover
       bufferingTimerRef.current = setTimeout(() => {
         if (isBuffering && webViewRef.current) {
           console.log("Buffering persisted too long, attempting recovery...");
@@ -551,53 +604,34 @@ export default function ImprovedHLSWebViewPlayer() {
     };
   }, [isBuffering]);
   
-  // Clean up effect
   useEffect(() => {
     return () => {
-      // Reset screen orientation when component unmounts
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(e => {
         console.error("Failed to reset orientation:", e);
       });
     };
   }, []);
 
-  // Format time in MM:SS
-  const formatTime = (seconds) => {
+const formatTime = (seconds: number): string => {
     if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00';
     const minutes = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Toggle fullscreen mode
   const handleToggleFullScreen = async () => {
     try {
       if (isFullscreen) {
-        // Exit fullscreen mode
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-        
-        // Show navigation bar when exiting fullscreen
         await NavigationBar.setVisibilityAsync("visible");
         setControlsVisible(true);
-
-        // Show status bar when exiting fullscreen
         StatusBar.setHidden(false);
-        
-        // Show tab bar if it exists
         navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-        
       } else {
-        // Enter fullscreen mode
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-        
-        // Hide navigation bar when entering fullscreen
         await NavigationBar.setVisibilityAsync("hidden");
         setControlsVisible(true);
-
-        // Hide status bar when entering fullscreen
         StatusBar.setHidden(true);
-        
-        // Hide tab bar if it exists
         navigation.getParent()?.setOptions({ tabBarStyle: { display: "none" } });
       }
       
@@ -607,39 +641,30 @@ export default function ImprovedHLSWebViewPlayer() {
     }
   };
 
-  // Toggle play/pause
-  const togglePlayPause = () => {
-    if (!webViewRef.current) return;
-    
-    const command = isPlaying ? { type: 'pause' } : { type: 'play' };
-    sendToWebView(command);
-    setIsPlaying(!isPlaying);
-  };
-
-  // Seek backward
+  const togglePlayPause = (): void => {
+  if (!webViewRef.current) return;
+  
+  const command: WebViewCommand = isPlaying ? { type: 'pause' } : { type: 'play' };
+  sendToWebView(command);
+  setIsPlaying(!isPlaying);
+};
   const seekBackward = () => {
     if (!webViewRef.current) return;
-    
     sendToWebView({ type: 'seekBackward', seconds: 10 });
   };
 
-  // Seek forward
   const seekForward = () => {
     if (!webViewRef.current) return;
-    
     sendToWebView({ type: 'seekForward', seconds: 10 });
   };
 
-  // Handle slider seeking
-  const onSlidingComplete = (value) => {
+const onSlidingComplete = (value: number): void => {
     if (!webViewRef.current || !duration) return;
-    
     const newPosition = value * duration;
     sendToWebView({ type: 'seek', time: newPosition });
   };
 
-  // Send command to WebView
-  const sendToWebView = (command) => {
+const sendToWebView = (command: WebViewCommand): void => {
     if (webViewRef.current) {
       webViewRef.current.injectJavaScript(`
         window.postMessage('${JSON.stringify(command)}', '*');
@@ -648,23 +673,40 @@ export default function ImprovedHLSWebViewPlayer() {
     }
   };
   
-  // Change video quality
-  const changeQuality = (source) => {
+  const getFilteredEpisodes = () => {
+    if (!searchQuery.trim()) {
+      return episodes;
+    }
+    
+    return episodes.filter(episode => {
+      const episodeNumber = episode.number.toString();
+      return episodeNumber.includes(searchQuery);
+    });
+  };
+
+  const returnToPortraitMode = async () => {
+    if (isFullscreen) {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+      await NavigationBar.setVisibilityAsync("visible");
+      navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
+      StatusBar.setHidden(false);
+      setIsFullscreen(false);
+    }
+  };
+const changeQuality = (source: VideoSource): void => {
     setVideoSource(source.url);
     setSelectedQuality(source.quality);
-    setShowQualityOptions(false);
+    setPickerVisible(false);
     setIsReady(false);
   };
   
-  // Retry playback
   const retryPlayback = () => {
     if (webViewRef.current) {
       sendToWebView({ type: 'reload' });
     }
   };
 
-  // Handle WebView messages
-  const handleWebViewMessage = (event) => {
+const handleWebViewMessage = (event: { nativeEvent: { data: string } }): void => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       
@@ -701,7 +743,6 @@ export default function ImprovedHLSWebViewPlayer() {
           break;
           
         case 'autoplay_blocked':
-          // Show a message or automatically try to play again
           sendToWebView({ type: 'play' });
           break;
       }
@@ -710,11 +751,42 @@ export default function ImprovedHLSWebViewPlayer() {
     }
   };
 
+  const renderEpisodeItem = ({ item }: { item: Episode }) => {
+    const isCurrentEpisode = item.episodeid === episodeid;
+    
+    return (
+      <TouchableOpacity
+        style={[styles.episodeContainer, isCurrentEpisode && styles.currentEpisode]}
+        onPress={() => {
+          setEpisodeLoading(true);
+          setEpisodeid(item.episodeid);
+        }}
+        disabled={episodeLoading || isCurrentEpisode}
+      >
+        <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
+        <View style={styles.episodeTextContainer}>
+          <Text style={styles.episodeTitle}>Episode {item.number}</Text>
+          <Text style={styles.episodeTitle} numberOfLines={1}>
+            {item.title}
+          </Text>
+          <Text style={styles.episodeMeta}>{item.createdAt}</Text>
+        </View>
+        {isCurrentEpisode && (
+          <View style={styles.playingIndicator}>
+            <MaterialIcons name="play-arrow" size={20} color="#e50914" />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  
   return (
     <View style={styles.container}>
-       
-    <Pressable onPress={() => setShowControls(!showControls)}
-style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}>
+      <Pressable 
+        onPress={() => setShowControls(!showControls)}
+        style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}
+      >
         <WebView
           ref={webViewRef}
           source={{ html: webViewHtml }}
@@ -741,86 +813,75 @@ style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}>
           </View>
         )}
         
-        <View style={styles.customControls}>
-          <View style={styles.topControls}>
-            <TouchableOpacity 
-              style={styles.qualityButton}
-              onPress={() => setShowQualityOptions(!showQualityOptions)}
-            >
-              <Text style={styles.qualityButtonText}>
-                {selectedQuality || "Auto"}
-              </Text>
-            </TouchableOpacity>
-            <View style={styles.rightControls}>
-              <TouchableOpacity onPress={() => setPickerVisible(true)}>
-                <Ionicons name="settings" size={24} color="white" />
+        {showControls && (
+          <View style={styles.customControls}>
+            <View style={styles.topControls}>
+                <TouchableOpacity onPress={async () => {
+                await returnToPortraitMode();
+                navigation.goBack();
+              }}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+                
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.fullscreenButton}
-                onPress={handleToggleFullScreen}
+                  <Text style={styles.episodeNumberText}>
+            Episode {currentEpisode?.number}
+          </Text>
+              <View style={styles.rightControls}>
+                  <TouchableOpacity 
+                style={styles.qualityButton}
+                onPress={() => setPickerVisible(!pickerVisible)}
               >
+                                  <Ionicons name="settings" size={24} color="white" />
+              
+              </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.fullscreenButton}
+                  onPress={handleToggleFullScreen}
+                >
+                  <MaterialIcons 
+                    name={isFullscreen ? "fullscreen-exit" : "fullscreen"} 
+                    size={24} 
+                    color="white" 
+                  />
+                </TouchableOpacity>
+              </View>
+            
+            </View>
+            
+            <View style={styles.seekControls}>
+              <TouchableOpacity onPress={seekBackward} style={styles.controlButton}>
+                <MaterialIcons name="replay-10" size={32} color="white" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseButton}>
                 <MaterialIcons 
-                  name={isFullscreen ? "fullscreen-exit" : "fullscreen"} 
-                  size={24} 
+                  name={isPlaying ? "pause" : "play-arrow"} 
+                  size={48} 
                   color="white" 
                 />
               </TouchableOpacity>
-            </View>
-          </View>
-          
-          <View style={styles.seekControls}>
-            <TouchableOpacity onPress={seekBackward} style={styles.controlButton}>
-              <MaterialIcons name="replay-10" size={32} color="white" />
-            </TouchableOpacity>
-            
-            <TouchableOpacity onPress={togglePlayPause} style={styles.playPauseButton}>
-              <MaterialIcons 
-                name={isPlaying ? "pause" : "play-arrow"} 
-                size={48} 
-                color="white" 
-              />
-            </TouchableOpacity>
-            
-            <TouchableOpacity onPress={seekForward} style={styles.controlButton}>
-              <MaterialIcons name="forward-10" size={32} color="white" />
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.progressContainer}>
-            <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
-            
-            <Slider
-              style={styles.progressSlider}
-              minimumValue={0}
-              maximumValue={1}
-              value={duration > 0 ? currentTime / duration : 0}
-              onSlidingComplete={onSlidingComplete}
-              minimumTrackTintColor="#FFFFFF"
-              maximumTrackTintColor="rgba(255, 255, 255, 0.5)"
-              thumbTintColor="#FFFFFF"
-            />
-            
-            <Text style={styles.timeText}>{formatTime(duration)}</Text>
-          </View>
-        </View>
-        
-        {showQualityOptions && (
-          <View style={styles.qualityOptions}>
-            <Text style={styles.qualityTitle}>Select Quality</Text>
-            {sources.map((source, index) => (
-              <TouchableOpacity 
-                key={index}
-                style={[
-                  styles.qualityOption,
-                  selectedQuality === source.quality && styles.selectedQuality
-                ]}
-                onPress={() => changeQuality(source)}
-              >
-                <Text style={styles.qualityText}>
-                  {source.quality} {source.isDub ? '(Dub)' : ''}
-                </Text>
+              
+              <TouchableOpacity onPress={seekForward} style={styles.controlButton}>
+                <MaterialIcons name="forward-10" size={32} color="white" />
               </TouchableOpacity>
-            ))}
+            </View>
+            
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
+              
+              <Slider
+                style={styles.progressSlider}
+                minimumValue={0}
+                maximumValue={1}
+                value={duration > 0 ? currentTime / duration : 0}
+                onSlidingComplete={onSlidingComplete}
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="rgba(255, 255, 255, 0.5)"
+                thumbTintColor="#FFFFFF"
+              />
+              
+              <Text style={styles.timeText}>{formatTime(duration)}</Text>
+            </View>
           </View>
         )}
         
@@ -829,46 +890,107 @@ style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}>
           activeOpacity={1}
           onPress={() => {
             setShowControls(!showControls);
-            setShowQualityOptions(false);
+            setPickerVisible(false);
           }}
         />
       </Pressable>
-      
-      {!isFullscreen && (
-        <View style={styles.infoContainer}>
-          <Text style={styles.infoText}>
-            Tap video to show/hide controls
-          </Text>
-          <Text style={styles.infoText}>
-            Current position: {formatTime(currentTime)}
-          </Text>
-          <Text style={styles.infoText}>
-            Total duration: {formatTime(duration)}
-          </Text>
-          <Text style={styles.infoText}>
-            Selected quality: {selectedQuality || "Auto"}
-          </Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={retryPlayback}
+
+      <Modal visible={pickerVisible} transparent animationType="slide">
+  <View style={styles.modalBackdrop}>
+    <View style={[
+      styles.modalContent, 
+      isFullscreen && styles.modalContentFullscreen
+    ]}>
+      <Text style={styles.modalTitle}>Select Quality</Text>
+      <ScrollView style={styles.qualityScrollView}>
+        {sources.map((source, index) => (
+          <TouchableOpacity
+            key={index}
+            style={[
+              styles.qualityItem,
+              selectedQuality === source.quality && styles.selectedQuality
+            ]}
+            onPress={() => changeQuality(source)}
           >
-            <Text style={styles.retryButtonText}>Retry Playback</Text>
+            <Text style={styles.qualityText}>
+              {source.quality} {source.isDub ? '(Dub)' : ''}
+            </Text>
           </TouchableOpacity>
+        ))}
+      </ScrollView>
+      <TouchableOpacity 
+        style={styles.closeButton} 
+        onPress={() => setPickerVisible(false)}
+      >
+        <Text style={styles.closeText}>Close</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
+      {currentEpisode && (
+        <View style={styles.episodeNavigation}>
+          <TouchableOpacity
+            onPress={handlePreviousEpisode}
+            disabled={currentEpisode && currentIndex <= 0}
+            style={[
+              styles.navButton,
+              (currentEpisode && currentIndex <= 0) && styles.disabledButton,
+            ]}
+          >
+            <Ionicons name="chevron-back" size={30} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.episodeNumberText}>
+            Episode {currentEpisode?.number}
+          </Text>
+          <TouchableOpacity
+            onPress={handleNextEpisode}
+            disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
+            style={[
+              styles.navButton,
+              (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
+            ]}
+          >
+            <Ionicons name="chevron-forward" size={30} color="white" />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <View style={styles.nextEpisodesHeader}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.nextEpisodesText}>Episodes</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <View style={styles.headerControls}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search by number"
+              placeholderTextColor="#888"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              keyboardType="numeric"
+            />
+          </View>
+        </View>
+      </View>
+
+      {!isFullscreen && episodes.length > 0 && (
+        <View style={styles.episodesSection}>
+          <FlatList
+            data={getFilteredEpisodes()}
+            renderItem={renderEpisodeItem}
+            keyExtractor={(item) => item.episodeid}
+            contentContainerStyle={styles.episodesList}
+          />
         </View>
       )}
     </View>
   );
 }
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#000",
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 16,
-    textAlign: 'center',
   },
   videoContainer: {
     width: '100%',
@@ -904,22 +1026,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
   },
-  bufferingText: {
-    color: 'white',
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    padding: 8,
-    borderRadius: 4,
-  },
   loadingContainer: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  loadingText: {
-    color: '#ddd',
-    marginTop: 10,
-    fontSize: 16,
   },
   customControls: {
     position: 'absolute',
@@ -931,6 +1042,29 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 16,
     zIndex: 10,
+  },
+  topControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  qualityButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 4,
+  },
+  qualityButtonText: {
+    color: 'white',
+    fontSize: 14,
+  },
+  rightControls: {
+    flexDirection: "row",
+    gap: 20,
+  },
+  fullscreenButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 4,
   },
   seekControls: {
     flexDirection: 'row',
@@ -959,26 +1093,195 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
   },
-  fullscreenButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    padding: 8,
-    borderRadius: 4,
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContentFullscreen: {
+  width: '80%',
+  maxWidth: 300,
+  maxHeight: '80%',
+},
+qualityScrollView: {
+  maxHeight: 300,
+},
+  modalContent: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+    padding: 20,
+    width: '80%',
+    maxHeight: '70%',
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  qualityItem: {
+    padding: 14,
+    borderRadius: 8,
+    marginBottom: 10,
+    backgroundColor: '#2a2a2a',
+  },
+  selectedQuality: {
+    backgroundColor: '#e50914',
+  },
+  qualityText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  closeButton: {
+    backgroundColor: '#333',
+    padding: 14,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  closeText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
   },
   infoContainer: {
     marginTop: 16,
-    padding: 8,
-    backgroundColor: '#eaeaea',
-    borderRadius: 4,
+    padding: 16,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    margin: 16,
   },
   infoText: {
+    color: '#fff',
     fontSize: 14,
+    marginBottom: 8,
+  },
+  retryButton: {
+    backgroundColor: '#e50914',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  episodesSection: {
+    flex: 1,
+    backgroundColor: '#000',
+    paddingTop: 16,
+  },
+  episodesHeader: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  episodesList: {
+    paddingBottom: 16,
+  },
+  episodeContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+    backgroundColor: "#1E1E1E",
+    borderRadius: 8,
+    margin: 10,
+    overflow: "hidden",
+    padding: 10,
+  },
+  currentEpisode: {
+    backgroundColor: '#2a2a2a',
+    borderWidth: 2,
+    borderColor: '#e50914',
+  },
+  episodeThumbnail: {
+    width: "40%",
+    height: 100,
+    borderRadius: 8,
+  },
+  episodeTextContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  episodeTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
     marginBottom: 4,
   },
-  rightControls: {
+  episodeMeta: {
+    fontSize: 14,
+    color: "#BBBBBB",
+    marginTop: 4,
+  },
+  playingIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 12,
+    padding: 4,
+  },
+  nextEpisodesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+    marginBottom: 12,
+  },
+  headerLeft: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  searchInput: {
+    backgroundColor: "#333",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    color: "#fff",
+    minWidth: 120,
+  },
+  nextEpisodesText: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#FFFFFF",
+  },
+  disabledButton: {
+    backgroundColor: "#555",
+  },
+  episodeNavigation: {
     flexDirection: "row",
-    gap: 20,
+    justifyContent: "space-around",
+    alignItems: "center",
+    marginVertical: 10,
+    paddingHorizontal: 20,
+  },
+  navButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+  },
+  episodeNumberText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+    marginLeft: 10,
+  },
+  headerControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 15,
+  },
+  headerRight: {
+    flex: 0.4,
+    alignItems: 'flex-end',
   },
 });

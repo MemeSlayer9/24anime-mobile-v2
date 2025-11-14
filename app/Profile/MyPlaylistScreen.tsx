@@ -108,7 +108,7 @@ const MyPlaylist = () => {
 const fetchDetail = async () => {
   try {
     if (!bookMarkId) return;
-    const response = await axios.get(`https://hakai-api.vercel.app/api/anilist/get-provider/${bookMarkId}`);
+    const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/mappings/${bookMarkId}`);
     
     // Extract only title and image from the API response
     const apiData = response.data.data;

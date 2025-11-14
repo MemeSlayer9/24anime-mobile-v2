@@ -9,9 +9,10 @@ import VideoPlayer from "../screens/VideoPlayer";
 import WatchZoro from "../Watch/WatchZoro";
 import WatchAnimePahe from "../Watch/WatchAnimepahe";
 import WatchAnimekai from '../Watch/WatchAnimekai';
+import WatchAllanime from '../Watch/WatchAllanime';
 import WatchAnimeMaster from '../Watch/WatchAnimeMaster';
 import WatchAnicrush from '../Watch/WatchAniCrush';
-import ProfileScreen from "../Profile/Profile";
+import WatchAnizone from  '../Watch/WatchAnizone';
 import { EpisodeProvider } from "../context/EpisodeContext";
 import SearchHeader from "../Search/SearchHeader";
 import Search from "../Search/SearchScreen";
@@ -34,6 +35,7 @@ export type RootStackParamList = {
   Zoro: undefined;
   Animepahe: undefined;
   Animekai: undefined;
+  Allanime: undefined;
   Animemaster: undefined;
   Search: undefined;
   Login: undefined;
@@ -43,6 +45,7 @@ export type RootStackParamList = {
   MyPlaylist: undefined;
   History: undefined;
   Anicrush: undefined;
+  Anizone: undefined;
 };
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -103,6 +106,16 @@ export default function StackNavigator() {
                      <Stack.Screen
                       name="Anicrush"
                       component={WatchAnicrush}
+                      options={{ headerShown: false }}
+                    />
+                       <Stack.Screen
+                      name="Allanime"
+                      component={WatchAllanime}
+                      options={{ headerShown: false }}
+                    />
+                     <Stack.Screen
+                      name="Anizone"
+                      component={WatchAnizone}
                       options={{ headerShown: false }}
                     />
                     <Stack.Screen name="VideoPlayer" component={VideoPlayer} />

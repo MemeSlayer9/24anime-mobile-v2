@@ -68,7 +68,7 @@ interface DownloadOption {
   url: string;
 }
  
-type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Animepahe">;
+type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Allanime">;
 const VideoWithSubtitles = Video as any;
 
 const WatchZoro = () => {
@@ -198,7 +198,7 @@ const savePlaybackPosition = async (positionMillis: number): Promise<void> => {
         created_at: currentTimestamp,
         duration: durSec,
         saved_position: savedSec,
-        provider: "animepahe",
+        provider: "Allanime",
 
         
       });
@@ -248,59 +248,65 @@ const handlePlaybackStatusUpdate = async (status: any) => {
   }
 };
 
-const handleSubClick = () => {
-  
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(false);
-   
-};
 
-const handleDubClick = () => {
-  setEpisodeLoading(true); // Set loading state to true
-  setIsDubMode(true);
-  };
-
-useEffect(() => {
-  const fetchProvider = async () => {
-    try {
-      const response = await axios.get(`https://api.amvstr.me/api/v2/info/${animeId}`);
-      
-      if (response.data?.dub !== undefined) {
-        setDub(response.data.dub);
-      }
-      
-      setError(null);
-    } catch (error) {
-      console.error("Backup API also failed", error);
-      setError("Failed to fetch data from both APIs");
-    }
-  };
-  
-  if (animeId) {
-    fetchProvider();
-  }
-}, [animeId]);
  
 const fetchDownloadLinks = async () => {
   if (!episodeid) return;
   
   setIsLoading(true);
   setError(null);
-  
-  try {
-    // Check if download options are already available from fetchVideoData
-    if (downloadOptions.length > 0) {
-      // Download options already loaded, no need for additional API call
-      setIsLoading(false);
-      return;
-    }
-    
-    // Fallback: fetch download options if not already available
-    const response = await axios.get(`https://panuhak.vercel.app//anime/animepahe/watch?episodeId=${episodeid}`);
+   try {
+    const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/sources/${episodeid}`);
     const json = response.data;
     
-    if (json.download && Array.isArray(json.download)) {
-      setDownloadOptions(json.download);
+    const options: DownloadOption[] = [];
+    
+    // Extract from okru provider (priority)
+    if (json.okru && json.okru.data) {
+      // Add direct download if available
+      if (json.okru.data.download) {
+        options.push({
+          quality: 'Direct Download (OK.ru)',
+          url: json.okru.data.download
+        });
+      }
+      
+      // Add HLS sources
+      if (json.okru.data.sources && Array.isArray(json.okru.data.sources)) {
+        json.okru.data.sources.forEach((source: any, index: number) => {
+          if (source.url && source.isM3U8) {
+            options.push({
+              quality: `HLS Stream ${index + 1}`,
+              url: source.url
+            });
+          }
+        });
+      }
+    }
+    
+    // Fallback to mp4upload provider if okru has no options
+    if (options.length === 0 && json.mp4upload && json.mp4upload.data) {
+      if (json.mp4upload.data.download) {
+        options.push({
+          quality: 'Direct Download (MP4Upload)',
+          url: json.mp4upload.data.download
+        });
+      }
+      
+      if (json.mp4upload.data.sources && Array.isArray(json.mp4upload.data.sources)) {
+        json.mp4upload.data.sources.forEach((source: any) => {
+          if (source.url) {
+            options.push({
+              quality: source.quality || 'MP4 Download',
+              url: source.url
+            });
+          }
+        });
+      }
+    }
+    
+    if (options.length > 0) {
+      setDownloadOptions(options);
     } else {
       setError('No download options available');
     }
@@ -311,7 +317,6 @@ const fetchDownloadLinks = async () => {
     setIsLoading(false);
   }
 };
-
 const handleDownload = async (url: string) => {
     try {
       const supported = await Linking.canOpenURL(url);
@@ -334,32 +339,66 @@ const handleDownload = async (url: string) => {
       fetchDownloadLinks();
     }
   }, [modalVisible, episodeid]);
-
-
-  const fetchVideoData = async () => {
+ 
+const fetchVideoData = async () => {
     try {
-      const response = await axios.get(`https://dagkot.vercel.app/anime/animepahe/watch?episodeId=${episodeid}`);
+      const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/sources/${episodeid}`);
       const json = response.data;
       
-      if (json.sources && json.sources.length > 0) {
-        // Store all sources with original URLs
-        setSources(json.sources);
+      const allSources: VideoSource[] = [];
+      
+      // Define provider priorities and labels
+      const providerLabels: { [key: string]: string } = {
+        'okru': 'OK.ru',
+        'Internal-default-hls': 'Default HLS',
+        'Internal-Yt-mp4': 'YT MP4',
+        'Internal-S-mp4': 'SharePoint MP4',
+        'mp4upload': 'MP4Upload'
+      };
+      
+      // Iterate through all providers in the response
+      Object.keys(json).forEach((providerKey) => {
+        const provider = json[providerKey];
+        const providerLabel = providerLabels[providerKey] || providerKey;
         
-        // Find the 1080p BD non-dubbed source as default
-        const defaultSource = json.sources.find(
-          (source: VideoSource) => source.isM3U8 === true &&
-                  source.quality === "EMBER · 1080p BD" &&
-                  source.isDub === false
-        );
+        if (provider && provider.data && provider.data.sources) {
+          provider.data.sources.forEach((source: any, index: number) => {
+            // Add m3u8 sources
+            if (source.isM3u8 === true || source.type === 'hls') {
+              allSources.push({
+                url: source.url,
+                isM3U8: true,
+                quality: `${providerLabel} - ${source.type || 'HLS'}`,
+                isDub: false
+              });
+            }
+            // Add mp4 sources
+            else if (source.type === 'video/mp4' || !source.isM3u8) {
+              allSources.push({
+                url: source.url,
+                isM3U8: false,
+                quality: `${providerLabel} - MP4`,
+                isDub: false
+              });
+            }
+          });
+        }
+      });
+      
+      if (allSources.length > 0) {
+        setSources(allSources);
         
-        // If the preferred source exists, use it; otherwise fall back to the first source
-        const sourceUrl = defaultSource ? defaultSource.url : json.sources[0].url;
-        setInitialVideoSource(sourceUrl);
-        setVideoSource(sourceUrl);
-        setSelectedQuality(defaultSource ? defaultSource.quality : json.sources[0].quality);
+        // Use the first source as default (prioritize m3u8)
+        const defaultSource = allSources.find(s => s.isM3U8) || allSources[0];
+        setInitialVideoSource(defaultSource.url);
+        setVideoSource(defaultSource.url);
+        setSelectedQuality(defaultSource.quality);
+      } else {
+        setVideoError(true);
       }
     } catch (error) {
       console.error("Error fetching video data: ", error);
+      setVideoError(true);
     }
   };
   
@@ -459,6 +498,8 @@ useEffect(() => {
       } catch (error) {
         console.error("Error fetching qualities: ", error);
         setQualities([{ label: "Auto", uri: initialVideoSource }]);
+        // Automatically show the quality picker modal when there's an error
+        setPickerVisible(true);
       } finally {
         setLoadingQualities(false);
       }
@@ -469,26 +510,51 @@ useEffect(() => {
 
   
 
-    const fetchAnimeDetails = async () => {
-    try {
-      const response = await axios.get(`https://dagkot.vercel.app/meta/anilist/info/${animeId}?provider=animepahe`);
+  const fetchAnimeDetails = async () => {
+  try {
+    const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/episodes/${animeId}?provider=allanime`);
+    const json = response.data;
+    
+    // Set anime details from the data object
+    if (json.data) {
       const modifiedAnime = {
-        ...response.data,
-        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
+        ...json.data,
+        id: json.data.anilistId,
+        posterImage: json.data.image,
+        cover: json.data.bannerImage,
+        // Map other fields to match your Anime type structure
+        title: json.data.title,
+        description: json.data.synopsis,
+        status: json.data.status,
+        releaseDate: json.data.releaseDate,
+        genres: json.data.genres,
+        totalEpisodes: json.data.episodes,
       };
+      
       setAnime(modifiedAnime);
-      setAnimeId(modifiedAnime.id);
-      if (modifiedAnime.episodes) {
-        const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
-          ...episode,
-          episodeid: episode.id,
-        }));
-        setEpisodes(mappedEpisodes);
-      }
-    } catch (err) {
-      console.error("Error fetching anime details:", err);
-     }
-  };
+      setAnimeId(json.data.anilistId);
+    }
+    
+    // Map episodes from providerEpisodes array
+    if (json.providerEpisodes && Array.isArray(json.providerEpisodes)) {
+      const mappedEpisodes = json.providerEpisodes.map((episode: any) => ({
+        id: episode.episodeId,
+        episodeid: episode.episodeId,
+        number: episode.episodeNumber,
+        title: episode.title || `Episode ${episode.episodeNumber}`,
+        image: episode.thumbnail || json.data?.image || 'https://via.placeholder.com/150',
+        description: episode.overview || '',
+        createdAt: episode.aired ? 'Aired' : 'Not Aired',
+        // Add any other fields your Episode type requires
+      }));
+      
+      setEpisodes(mappedEpisodes);
+    }
+  } catch (err) {
+    console.error("Error fetching anime details:", err);
+    setVideoError(true);
+  }
+};
 
     useEffect(() => {
        if (animeId) {
@@ -559,8 +625,7 @@ useEffect(() => {
   };
 }, [controlsVisible]);
 
-  
-
+ 
   // Helper: Convert time string (e.g. "00:01:23.456") to seconds.
   const parseTime = (timeStr: string) => {
     const parts = timeStr.split(":");
@@ -634,7 +699,7 @@ useEffect(() => {
       const previousEpisode = filteredEpisodes[currentIndex - 1];
       setEpisodeLoading(true);
       setEpisodeid(previousEpisode.episodeid);
-      navigation.navigate("Animepahe");
+      navigation.navigate("Allanime");
     }
   }
 };
@@ -655,7 +720,7 @@ const handleNextEpisode = () => {
       const nextEpisode = filteredEpisodes[currentIndex + 1];
       setEpisodeLoading(true);
       setEpisodeid(nextEpisode.episodeid);
-      navigation.navigate("Animepahe");
+      navigation.navigate("Allanime");
     }
   }
 };
@@ -683,7 +748,7 @@ const handleNextEpisode = () => {
             onPress={() => {
           setEpisodeLoading(true);
               setEpisodeid(item.episodeid);
-              navigation.navigate("Animepahe");
+              navigation.navigate("Allanime");
             }}
           >
             <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
@@ -712,453 +777,453 @@ const handleNextEpisode = () => {
 
   return (
     <View style={styles.container}>
-  <Pressable 
-  onPress={() => setControlsVisible(!controlsVisible)}
-  style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
->
-  
-  {videoError ? (
-    // Error state - only show error content
-    <View style={styles.errorContainer}>
-      <Image
-        source={{ uri: "https://img.freepik.com/free-vector/glitch-error-404-page_23-2148105404.jpg?t=st=1745470901~exp=1745474501~hmac=e12cc53fcf022d08acf6c5416b21ad457b494572dda8eee4a8c724b7d5fe1127&w=826" }}
-        style={styles.errorImage}
-        resizeMode="contain"
-      />
-      <Text style={styles.errorText}>Video not found</Text>
-      <TouchableOpacity 
-        style={styles.retryButton}
-        onPress={() => {
-          setVideoError(false);
-          fetchVideoData();
-        }}
-      >
-        <Text style={styles.retryButtonText}>Retry</Text>
-      </TouchableOpacity>
-    </View>
-  ) : (
-    // Video playing state - show video and controls
-    <>
-          
-        <VideoWithSubtitles
-        ref={videoRef}
-      source={{ 
-    uri: videoSource,
-    headers: {
-"Referer": "https://kwik.cx/"
-      },
-  }}
-        style={styles.video}
-        resizeMode={ResizeMode.CONTAIN}
-        shouldPlay
-        volume={volume}
-        onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-        textTracks={subtitles.map(sub => ({
-          uri: sub.url,
-          kinduage: sub.kind,
-          type: "text/vtt",
-          title: sub.kind,
-        }))}
-        selectedTextTrack={{
-          type: selectedSubtitle === "disabled" ? "disabled" : "title",
-          value: selectedSubtitle,
-        }}
-      />
- 
-      
-      {currentSubtitle && (
-        <View style={styles.subtitleContainer}>
-          <Text style={styles.subtitleText}>{currentSubtitle}</Text>
-        </View>
-      )}
-
-      <TouchableWithoutFeedback onPress={() => !isLocked && setControlsVisible(!controlsVisible)}>
-        <View style={[styles.overlay, isFullscreen && styles.fullscreenOverlay]}>
-          {controlsVisible && (
-            <>
-              <View style={styles.topControls}>
-              <TouchableOpacity onPress={async () => {
-  await returnToPortraitMode();
-  navigation.goBack();
-}}>
-  <Ionicons name="arrow-back" size={24} color="white" />
-  
-</TouchableOpacity>
-  {currentEpisode && (
-              <Text style={styles.episodeNumberText}>
-                Episode {currentEpisode.number}
-              </Text>
-            )}
-                <View style={styles.rightControls}>
-                
-                  <TouchableOpacity onPress={() => setPickerVisible(true)}>
-                    <Ionicons name="settings" size={24} color="white" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleToggleFullScreen}>
-                    <Ionicons name={isFullscreen ? "contract" : "expand"} size={24} color="white" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-              <View style={styles.segmentsContainer}>
-                {introSegment &&
-                  currentTime / 1000 >= introSegment.start &&
-                  currentTime / 1000 < introSegment.end && (
-                    <TouchableOpacity
-                      style={styles.skipButton}
-                      onPress={() => {
-                        // Jump to the end of the intro segment.
-                        videoRef.current?.setPositionAsync(introSegment.end * 1000);
-                      }}
-                    >
-                      <Text style={styles.skipButtonText}>Skip Intro</Text>
-                    </TouchableOpacity>
-                  )}
-                {outroSegment &&
-                  outroSegment.start !== 0 &&
-                  currentTime / 1000 >= outroSegment.start &&
-                  currentTime / 1000 < outroSegment.end && (
-                    <TouchableOpacity
-                      style={styles.skipButton}
-                      onPress={() => {
-                        // Jump to the end of the outro segment.
-                        videoRef.current?.setPositionAsync(outroSegment.end * 1000);
-                      }}
-                    >
-                      <Text style={styles.skipButtonText}>Skip Outro</Text>
-                    </TouchableOpacity>
-                  )}
-              </View>
-
-              <View style={styles.bottomControls}>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={0}
-                  maximumValue={duration}
-                  value={sliderValue}
-                  onSlidingStart={() => setIsSliding(true)}
-                  onSlidingComplete={async (value) => {
-                    await videoRef.current?.setPositionAsync(value);
-                    setIsSliding(false);
-                  }}
-                  minimumTrackTintColor="#E50914"
-                  maximumTrackTintColor="#404040"
-                  thumbTintColor="#E50914"
-                />
-
-                <View style={styles.timeControls}>
-                  <Text style={styles.timeText}>{formatTime(currentTime / 1000)}</Text>
-                  <View style={styles.volumeWrapper}>
-                    <TouchableOpacity onPress={() => setShowVolumeSlider(true)}>
-                      <Ionicons name={getVolumeIcon(volume)} size={28} color="white" />
-                    </TouchableOpacity>
-                    {showVolumeSlider && (
-                      <Slider
-                        style={styles.volumeSlider}
-                        minimumValue={0}
-                        maximumValue={1}
-                        value={volume}
-                        onValueChange={setVolume}
-                        onSlidingComplete={() => setShowVolumeSlider(false)}
-                        minimumTrackTintColor="red"
-                        maximumTrackTintColor="gray"
-                        thumbTintColor="red"
-                      />
-                    )}
-                  </View>
-                  <View style={styles.centerControls}>
-                    <TouchableOpacity
-      onPress={handlePreviousEpisode}
-      disabled={currentEpisode && currentIndex <= 0}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex <= 0) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-back" size={30} color="white" />
-    </TouchableOpacity>
-                    <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
-                      <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
-                    </TouchableOpacity>
-                  <TouchableOpacity
-      onPress={handleNextEpisode}
-      disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-forward" size={30} color="white" />
-    </TouchableOpacity>
-                  </View>
-                  <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
-                </View>
-              </View>
-              <View style={styles.playIconOverlayRow}>
-  {isVideoLoading ? (
-    // Only show spinner while loading
-    <View style={styles.loadingContainer}>
-      <ActivityIndicator size="large" color="red" />
-    </View>
-  ) : (
-    // Show rewind, play/pause, and fast-forward once loaded
-    <>
-      <TouchableOpacity 
-        onPress={handleRewind} 
-        style={styles.rewindOverlay}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Image 
-          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_backward-1024.png" }} 
-          style={styles.rewindIcon} 
-        />
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        onPress={handlePlayPause}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Ionicons name={paused ? "play" : "pause"} size={50} color="white" />
-      </TouchableOpacity>
-      
-      <TouchableOpacity 
-        onPress={handleFastForward} 
-        style={styles.fastForwardOverlay}
-        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-      >
-        <Image 
-          source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_forward-1024.png" }} 
-          style={styles.fastForwardIcon} 
-        />
-      </TouchableOpacity>
-    </>
-  )}
-</View>
-            </>
-          )}
-
-           
-        </View>
-      </TouchableWithoutFeedback>
-    </>
-  )}
-</Pressable>
-
-        
- <Modal visible={pickerVisible} transparent animationType="slide">
-   <View style={styles.modalBackdrop}>
-     <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>Select Quality</Text>
-          {sources.map((source: VideoSource) => (
-            <TouchableOpacity
-              key={source.url}
-              style={[
-                styles.qualityItem,
-                source.quality === selectedQuality ? styles.selectedQuality : null
-              ]}
-              onPress={async () => {
-                try {
-                  // Update the video source with the selected quality URL
-                  setVideoSource(source.url);
-                  setSelectedQuality(source.quality);
-                  setPickerVisible(false);
-                  
-                  // Get current position if video ref exists
-                  if (videoRef.current) {
-                    try {
-                      const status = await videoRef.current.getStatusAsync();
-                      const currentTime = status.positionMillis;
-                      
-                      // Give the video a moment to load the new source, then seek
-                      setTimeout(() => {
-                        if (videoRef.current) {
-                          videoRef.current.setPositionAsync(currentTime)
-                            .catch(err => console.error("Error seeking:", err));
-                        }
-                      }, 1000);
-                    } catch (statusError) {
-                      console.error("Error getting video status:", statusError);
-                    }
-                  }
-                } catch (error) {
-                  console.error("Error changing quality:", error);
-                }
-              }}
-            >
-              <Text style={styles.qualityText}>
-                {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
-              </Text>
-            </TouchableOpacity>
-          ))}
-          <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
-            <Text style={styles.closeText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-   </View>
- </Modal>
-
-      {/* Subtitles Picker Modal */}
+     <Pressable 
+     onPress={() => setControlsVisible(!controlsVisible)}
+     style={isFullscreen ? styles.fullscreenContainer : styles.normalContainer}
+   >
+     
+     {videoError ? (
+       // Error state - only show error content
+       <View style={styles.errorContainer}>
+         <Image
+           source={{ uri: "https://img.freepik.com/free-vector/glitch-error-404-page_23-2148105404.jpg?t=st=1745470901~exp=1745474501~hmac=e12cc53fcf022d08acf6c5416b21ad457b494572dda8eee4a8c724b7d5fe1127&w=826" }}
+           style={styles.errorImage}
+           resizeMode="contain"
+         />
+         <Text style={styles.errorText}>Video not found</Text>
+         <TouchableOpacity 
+           style={styles.retryButton}
+           onPress={() => {
+             setVideoError(false);
+             fetchVideoData();
+           }}
+         >
+           <Text style={styles.retryButtonText}>Retry</Text>
+         </TouchableOpacity>
+       </View>
+     ) : (
+       // Video playing state - show video and controls
+       <>
+             
+           <VideoWithSubtitles
+           ref={videoRef}
+         source={{ 
+       uri: videoSource,
+       headers: {
+   "Referer": "https://kwik.cx/"
+         },
+     }}
+           style={styles.video}
+           resizeMode={ResizeMode.CONTAIN}
+           shouldPlay
+           volume={volume}
+           onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+           textTracks={subtitles.map(sub => ({
+             uri: sub.url,
+             kinduage: sub.kind,
+             type: "text/vtt",
+             title: sub.kind,
+           }))}
+           selectedTextTrack={{
+             type: selectedSubtitle === "disabled" ? "disabled" : "title",
+             value: selectedSubtitle,
+           }}
+         />
+    
          
-      <Modal visible={subtitlesPickerVisible} transparent animationType="slide">
-           <View style={styles.nextEpisodesHeader}>
-              <Text style={styles.nextEpisodesText}>Episodes</Text>
-                
-            </View>
-       <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Quality</Text>
-            {sources.map((source: VideoSource) => (
-              <TouchableOpacity
-                key={source.url}
-                style={[
-                  styles.qualityItem,
-                  source.quality === selectedQuality ? styles.selectedQuality : null
-                ]}
-                onPress={async () => {
-                  try {
-                    // Update the video source with the selected quality URL
-                    setVideoSource(source.url);
-                    setSelectedQuality(source.quality);
-                    setPickerVisible(false);
-                    
-                    // Get current position if video ref exists
-                    if (videoRef.current) {
-                      try {
-                        const status = await videoRef.current.getStatusAsync();
-                        const currentTime = status.positionMillis;
-                        
-                        // Give the video a moment to load the new source, then seek
-                        setTimeout(() => {
-                          if (videoRef.current) {
-                            videoRef.current.setPositionAsync(currentTime)
-                              .catch(err => console.error("Error seeking:", err));
-                          }
-                        }, 1000);
-                      } catch (statusError) {
-                        console.error("Error getting video status:", statusError);
-                      }
-                    }
-                  } catch (error) {
-                    console.error("Error changing quality:", error);
-                  }
-                }}
-              >
-                <Text style={styles.qualityText}>
-                  {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
-              <Text style={styles.closeText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-       {!isFullscreen && (
- <> 
-   {currentEpisode && (
-  <View style={styles.episodeNavigation}>
-    <TouchableOpacity
-      onPress={handlePreviousEpisode}
-      disabled={currentEpisode && currentIndex <= 0}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex <= 0) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-back" size={30} color="white" />
-    </TouchableOpacity>
-    <Text style={styles.episodeNumberText}>
-      Episode {currentEpisode?.number}
-    </Text>
-    <TouchableOpacity
-      onPress={handleNextEpisode}
-      disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
-      style={[
-        styles.navButton,
-        (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
-      ]}
-    >
-      <Ionicons name="chevron-forward" size={30} color="white" />
-    </TouchableOpacity>
-  </View>
-)}
-  <View style={styles.nextEpisodesHeader}>
-  <View style={styles.headerLeft}>
-    <Text style={styles.nextEpisodesText}>Episodes</Text>
-  </View>
- 
-  <View style={styles.headerRight}>
-    <View style={styles.headerControls}>
-      <TouchableOpacity 
-        style={styles.downloadButton} 
-        onPress={() => setModalVisible(true)}
-      >
-        <Ionicons name="download" size={20} color="white" />
-        <Text style={styles.downloadButtonText}>Download Episode</Text>
-      </TouchableOpacity>
-
-      <TextInput
-        style={styles.searchInput}
-        placeholder="Search by number"
-        placeholderTextColor="#888"
-        value={searchQuery}
-        onChangeText={setSearchQuery}
-        keyboardType="numeric"
-      />
-    </View>
-  </View>
-
-  <Modal
-    animationType="slide"
-    transparent={true}
-    visible={modalVisible}
-    onRequestClose={() => setModalVisible(false)}
-  >
-    <View style={styles.modalBackdrop}>
-      <View style={styles.modalContent}>
-        <Text style={styles.modalTitle}>Download Options</Text>
-        
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#E50914" />
-            <Text style={styles.loadingText}>Loading download options...</Text>
-          </View>
-        ) : error ? (
-          <Text style={styles.errorText}>{error}</Text>
-        ) : downloadOptions.length === 0 ? (
-          <Text style={styles.noOptionsText}>No download options available</Text>
-        ) : (
-          downloadOptions.map((option, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.downloadOption}
-              onPress={() => handleDownload(option.url)}
-            >
-              <Text style={styles.qualityText}>{option.quality}</Text>
-              <Ionicons name="cloud-download-outline" size={24} color="#E50914" />
-            </TouchableOpacity>
-          ))
-        )}
-        
-        <TouchableOpacity
-          style={styles.closeButton}
-          onPress={() => setModalVisible(false)}
-        >
-          <Text style={styles.closeText}>Close</Text>
-        </TouchableOpacity>
+         {currentSubtitle && (
+           <View style={styles.subtitleContainer}>
+             <Text style={styles.subtitleText}>{currentSubtitle}</Text>
+           </View>
+         )}
+   
+         <TouchableWithoutFeedback onPress={() => !isLocked && setControlsVisible(!controlsVisible)}>
+           <View style={[styles.overlay, isFullscreen && styles.fullscreenOverlay]}>
+             {controlsVisible && (
+               <>
+                 <View style={styles.topControls}>
+                 <TouchableOpacity onPress={async () => {
+     await returnToPortraitMode();
+     navigation.goBack();
+   }}>
+     <Ionicons name="arrow-back" size={24} color="white" />
+     
+   </TouchableOpacity>
+     {currentEpisode && (
+                 <Text style={styles.episodeNumberText}>
+                   Episode {currentEpisode.number}
+                 </Text>
+               )}
+                   <View style={styles.rightControls}>
+                   
+                     <TouchableOpacity onPress={() => setPickerVisible(true)}>
+                       <Ionicons name="settings" size={24} color="white" />
+                     </TouchableOpacity>
+                     <TouchableOpacity onPress={handleToggleFullScreen}>
+                       <Ionicons name={isFullscreen ? "contract" : "expand"} size={24} color="white" />
+                     </TouchableOpacity>
+                   </View>
+                 </View>
+                 <View style={styles.segmentsContainer}>
+                   {introSegment &&
+                     currentTime / 1000 >= introSegment.start &&
+                     currentTime / 1000 < introSegment.end && (
+                       <TouchableOpacity
+                         style={styles.skipButton}
+                         onPress={() => {
+                           // Jump to the end of the intro segment.
+                           videoRef.current?.setPositionAsync(introSegment.end * 1000);
+                         }}
+                       >
+                         <Text style={styles.skipButtonText}>Skip Intro</Text>
+                       </TouchableOpacity>
+                     )}
+                   {outroSegment &&
+                     outroSegment.start !== 0 &&
+                     currentTime / 1000 >= outroSegment.start &&
+                     currentTime / 1000 < outroSegment.end && (
+                       <TouchableOpacity
+                         style={styles.skipButton}
+                         onPress={() => {
+                           // Jump to the end of the outro segment.
+                           videoRef.current?.setPositionAsync(outroSegment.end * 1000);
+                         }}
+                       >
+                         <Text style={styles.skipButtonText}>Skip Outro</Text>
+                       </TouchableOpacity>
+                     )}
+                 </View>
+   
+                 <View style={styles.bottomControls}>
+                   <Slider
+                     style={styles.slider}
+                     minimumValue={0}
+                     maximumValue={duration}
+                     value={sliderValue}
+                     onSlidingStart={() => setIsSliding(true)}
+                     onSlidingComplete={async (value) => {
+                       await videoRef.current?.setPositionAsync(value);
+                       setIsSliding(false);
+                     }}
+                     minimumTrackTintColor="#E50914"
+                     maximumTrackTintColor="#404040"
+                     thumbTintColor="#E50914"
+                   />
+   
+                   <View style={styles.timeControls}>
+                     <Text style={styles.timeText}>{formatTime(currentTime / 1000)}</Text>
+                     <View style={styles.volumeWrapper}>
+                       <TouchableOpacity onPress={() => setShowVolumeSlider(true)}>
+                         <Ionicons name={getVolumeIcon(volume)} size={28} color="white" />
+                       </TouchableOpacity>
+                       {showVolumeSlider && (
+                         <Slider
+                           style={styles.volumeSlider}
+                           minimumValue={0}
+                           maximumValue={1}
+                           value={volume}
+                           onValueChange={setVolume}
+                           onSlidingComplete={() => setShowVolumeSlider(false)}
+                           minimumTrackTintColor="red"
+                           maximumTrackTintColor="gray"
+                           thumbTintColor="red"
+                         />
+                       )}
+                     </View>
+                     <View style={styles.centerControls}>
+                       <TouchableOpacity
+         onPress={handlePreviousEpisode}
+         disabled={currentEpisode && currentIndex <= 0}
+         style={[
+           styles.navButton,
+           (currentEpisode && currentIndex <= 0) && styles.disabledButton,
+         ]}
+       >
+         <Ionicons name="chevron-back" size={30} color="white" />
+       </TouchableOpacity>
+                       <TouchableOpacity onPress={handlePlayPause} style={styles.controlButton}>
+                         <Ionicons name={paused ? "play" : "pause"} size={32} color="white" />
+                       </TouchableOpacity>
+                     <TouchableOpacity
+         onPress={handleNextEpisode}
+         disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
+         style={[
+           styles.navButton,
+           (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
+         ]}
+       >
+         <Ionicons name="chevron-forward" size={30} color="white" />
+       </TouchableOpacity>
+                     </View>
+                     <Text style={styles.timeText}>{formatTime(duration / 1000)}</Text>
+                   </View>
+                 </View>
+                 <View style={styles.playIconOverlayRow}>
+     {isVideoLoading ? (
+       // Only show spinner while loading
+       <View style={styles.loadingContainer}>
+         <ActivityIndicator size="large" color="red" />
+       </View>
+     ) : (
+       // Show rewind, play/pause, and fast-forward once loaded
+       <>
+         <TouchableOpacity 
+           onPress={handleRewind} 
+           style={styles.rewindOverlay}
+           hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+         >
+           <Image 
+             source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_backward-1024.png" }} 
+             style={styles.rewindIcon} 
+           />
+         </TouchableOpacity>
+         
+         <TouchableOpacity 
+           onPress={handlePlayPause}
+           hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+         >
+           <Ionicons name={paused ? "play" : "pause"} size={50} color="white" />
+         </TouchableOpacity>
+         
+         <TouchableOpacity 
+           onPress={handleFastForward} 
+           style={styles.fastForwardOverlay}
+           hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+         >
+           <Image 
+             source={{ uri: "https://cdn0.iconfinder.com/data/icons/player-controls/512/10sec_forward-1024.png" }} 
+             style={styles.fastForwardIcon} 
+           />
+         </TouchableOpacity>
+       </>
+     )}
+   </View>
+               </>
+             )}
+   
+              
+           </View>
+         </TouchableWithoutFeedback>
+       </>
+     )}
+   </Pressable>
+   
+           
+    <Modal visible={pickerVisible} transparent animationType="slide">
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalContent}>
+             <Text style={styles.modalTitle}>Select Quality</Text>
+             {sources.map((source: VideoSource) => (
+               <TouchableOpacity
+                 key={source.url}
+                 style={[
+                   styles.qualityItem,
+                   source.quality === selectedQuality ? styles.selectedQuality : null
+                 ]}
+                 onPress={async () => {
+                   try {
+                     // Update the video source with the selected quality URL
+                     setVideoSource(source.url);
+                     setSelectedQuality(source.quality);
+                     setPickerVisible(false);
+                     
+                     // Get current position if video ref exists
+                     if (videoRef.current) {
+                       try {
+                         const status = await videoRef.current.getStatusAsync();
+                         const currentTime = status.positionMillis;
+                         
+                         // Give the video a moment to load the new source, then seek
+                         setTimeout(() => {
+                           if (videoRef.current) {
+                             videoRef.current.setPositionAsync(currentTime)
+                               .catch(err => console.error("Error seeking:", err));
+                           }
+                         }, 1000);
+                       } catch (statusError) {
+                         console.error("Error getting video status:", statusError);
+                       }
+                     }
+                   } catch (error) {
+                     console.error("Error changing quality:", error);
+                   }
+                 }}
+               >
+                 <Text style={styles.qualityText}>
+                   {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
+                 </Text>
+               </TouchableOpacity>
+             ))}
+             <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
+               <Text style={styles.closeText}>Close</Text>
+             </TouchableOpacity>
+           </View>
       </View>
-    </View>
-  </Modal>
-</View>
-          <FlatList
-            data={filteredEpisodes}
-            renderItem={renderEpisodeItem}
-            keyExtractor={(item) => item.episodeid}
-             contentContainerStyle={styles.episodesList}
-          />
-           </>
-         )}  
-    </View>
+    </Modal>
+   
+         {/* Subtitles Picker Modal */}
+            
+         <Modal visible={subtitlesPickerVisible} transparent animationType="slide">
+              <View style={styles.nextEpisodesHeader}>
+                 <Text style={styles.nextEpisodesText}>Episodes</Text>
+                   
+               </View>
+          <View style={styles.modalBackdrop}>
+             <View style={styles.modalContent}>
+               <Text style={styles.modalTitle}>Select Quality</Text>
+               {sources.map((source: VideoSource) => (
+                 <TouchableOpacity
+                   key={source.url}
+                   style={[
+                     styles.qualityItem,
+                     source.quality === selectedQuality ? styles.selectedQuality : null
+                   ]}
+                   onPress={async () => {
+                     try {
+                       // Update the video source with the selected quality URL
+                       setVideoSource(source.url);
+                       setSelectedQuality(source.quality);
+                       setPickerVisible(false);
+                       
+                       // Get current position if video ref exists
+                       if (videoRef.current) {
+                         try {
+                           const status = await videoRef.current.getStatusAsync();
+                           const currentTime = status.positionMillis;
+                           
+                           // Give the video a moment to load the new source, then seek
+                           setTimeout(() => {
+                             if (videoRef.current) {
+                               videoRef.current.setPositionAsync(currentTime)
+                                 .catch(err => console.error("Error seeking:", err));
+                             }
+                           }, 1000);
+                         } catch (statusError) {
+                           console.error("Error getting video status:", statusError);
+                         }
+                       }
+                     } catch (error) {
+                       console.error("Error changing quality:", error);
+                     }
+                   }}
+                 >
+                   <Text style={styles.qualityText}>
+                     {source.quality.replace("EMBER · ", "")} {source.isDub ? '(Dubbed)' : '(Subbed)'}
+                   </Text>
+                 </TouchableOpacity>
+               ))}
+               <TouchableOpacity style={styles.closeButton} onPress={() => setPickerVisible(false)}>
+                 <Text style={styles.closeText}>Close</Text>
+               </TouchableOpacity>
+             </View>
+           </View>
+         </Modal>
+          {!isFullscreen && (
+    <> 
+      {currentEpisode && (
+     <View style={styles.episodeNavigation}>
+       <TouchableOpacity
+         onPress={handlePreviousEpisode}
+         disabled={currentEpisode && currentIndex <= 0}
+         style={[
+           styles.navButton,
+           (currentEpisode && currentIndex <= 0) && styles.disabledButton,
+         ]}
+       >
+         <Ionicons name="chevron-back" size={30} color="white" />
+       </TouchableOpacity>
+       <Text style={styles.episodeNumberText}>
+         Episode {currentEpisode?.number}
+       </Text>
+       <TouchableOpacity
+         onPress={handleNextEpisode}
+         disabled={currentEpisode && currentIndex >= filteredEpisodes.length - 1}
+         style={[
+           styles.navButton,
+           (currentEpisode && currentIndex >= filteredEpisodes.length - 1) && styles.disabledButton,
+         ]}
+       >
+         <Ionicons name="chevron-forward" size={30} color="white" />
+       </TouchableOpacity>
+     </View>
+   )}
+     <View style={styles.nextEpisodesHeader}>
+     <View style={styles.headerLeft}>
+       <Text style={styles.nextEpisodesText}>Episodes</Text>
+     </View>
+    
+     <View style={styles.headerRight}>
+       <View style={styles.headerControls}>
+         <TouchableOpacity 
+           style={styles.downloadButton} 
+           onPress={() => setModalVisible(true)}
+         >
+           <Ionicons name="download" size={20} color="white" />
+           <Text style={styles.downloadButtonText}>Download Episode</Text>
+         </TouchableOpacity>
+   
+         <TextInput
+           style={styles.searchInput}
+           placeholder="Search by number"
+           placeholderTextColor="#888"
+           value={searchQuery}
+           onChangeText={setSearchQuery}
+           keyboardType="numeric"
+         />
+       </View>
+     </View>
+   
+     <Modal
+       animationType="slide"
+       transparent={true}
+       visible={modalVisible}
+       onRequestClose={() => setModalVisible(false)}
+     >
+       <View style={styles.modalBackdrop}>
+         <View style={styles.modalContent}>
+           <Text style={styles.modalTitle}>Download Options</Text>
+           
+           {isLoading ? (
+             <View style={styles.loadingContainer}>
+               <ActivityIndicator size="large" color="#E50914" />
+               <Text style={styles.loadingText}>Loading download options...</Text>
+             </View>
+           ) : error ? (
+             <Text style={styles.errorText}>{error}</Text>
+           ) : downloadOptions.length === 0 ? (
+             <Text style={styles.noOptionsText}>No download options available</Text>
+           ) : (
+             downloadOptions.map((option, index) => (
+               <TouchableOpacity
+                 key={index}
+                 style={styles.downloadOption}
+                 onPress={() => handleDownload(option.url)}
+               >
+                 <Text style={styles.qualityText}>{option.quality}</Text>
+                 <Ionicons name="cloud-download-outline" size={24} color="#E50914" />
+               </TouchableOpacity>
+             ))
+           )}
+           
+           <TouchableOpacity
+             style={styles.closeButton}
+             onPress={() => setModalVisible(false)}
+           >
+             <Text style={styles.closeText}>Close</Text>
+           </TouchableOpacity>
+         </View>
+       </View>
+     </Modal>
+   </View>
+             <FlatList
+               data={filteredEpisodes}
+               renderItem={renderEpisodeItem}
+               keyExtractor={(item) => item.episodeid}
+                contentContainerStyle={styles.episodesList}
+             />
+              </>
+            )}  
+       </View>
   );
 };
 

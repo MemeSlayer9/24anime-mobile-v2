@@ -1,70 +1,72 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Button, StatusBar, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StatusBar, StyleSheet } from 'react-native';
 import * as Updates from 'expo-updates';
 import StackNavigator from './navigation/StackNavigator';
 
 export default function RootLayout() {
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [isFetching, setIsFetching] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
-  // 1️⃣ Check for updates on app start
+  // ✅ Automatically check, download & apply updates on app start
   useEffect(() => {
     (async () => {
       try {
-        const { isAvailable } = await Updates.checkForUpdateAsync(); // checks server for a new JS bundle :contentReference[oaicite:0]{index=0}
+        // Check if running in development mode
+        if (__DEV__) {
+          console.log('Skipping OTA update check in development mode');
+          return;
+        }
+
+        // 1️⃣ Check for updates
+        const { isAvailable } = await Updates.checkForUpdateAsync();
+        
         if (isAvailable) {
-          setUpdateAvailable(true);
+          setIsUpdating(true);
+          
+          // 2️⃣ Automatically fetch the update
+          const { isNew } = await Updates.fetchUpdateAsync();
+          
+          // 3️⃣ Automatically reload to apply it
+          if (isNew) {
+            await Updates.reloadAsync();
+          }
         }
       } catch (e) {
-        console.warn('Error checking for OTA update:', e);
+        console.warn('Error with automatic OTA update:', e);
+        // Continue loading app even if update fails
+        setIsUpdating(false);
       }
     })();
   }, []);
 
-  // 2️⃣ Fetch & apply update when user taps
-  const handleUpdate = async () => {
-    setIsFetching(true);
-    try {
-      const { isNew } = await Updates.fetchUpdateAsync();   // downloads the new bundle :contentReference[oaicite:1]{index=1}
-      if (isNew) {
-        await Updates.reloadAsync();                        // restarts app to apply it :contentReference[oaicite:2]{index=2}
-      }
-    } catch (e) {
-      console.error('Failed to fetch/apply update:', e);
-    } finally {
-      setIsFetching(false);
-    }
-  };
+  // Show loading screen while updating
+  if (isUpdating) {
+    return (
+      <View style={styles.updateContainer}>
+        <StatusBar backgroundColor="#161616" barStyle="light-content" />
+        <ActivityIndicator size="large" color="#007AFF" />
+        <Text style={styles.updateText}>Installing update...</Text>
+      </View>
+    );
+  }
 
   return (
     <>
       <StatusBar backgroundColor="#161616" barStyle="light-content" />
-
-      {/* OTA Update Banner */}
-      {updateAvailable && (
-        <View style={styles.banner}>
-          <Text style={styles.bannerText}>A new update is available!</Text>
-          <Button
-            title={isFetching ? 'Updating…' : 'Update Now'}
-            onPress={handleUpdate}
-          />
-        </View>
-      )}
-
-      {/* Your app’s main navigation */}
       <StackNavigator />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  banner: {
-    backgroundColor: '#fffae6',
-    padding: 12,
+  updateContainer: {
+    flex: 1,
+    backgroundColor: '#161616',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  bannerText: {
-    marginBottom: 8,
+  updateText: {
+    marginTop: 16,
     fontSize: 16,
+    color: '#FFFFFF',
   },
 });

@@ -13,7 +13,8 @@ import {
   FlatList,
   Image,
   TextInput,
-  BackHandler 
+  BackHandler,
+  Linking,
 } from "react-native";
 import { Video, ResizeMode } from "expo-av";
 import { Ionicons } from "@expo/vector-icons";
@@ -55,6 +56,17 @@ interface Segment {
   end: number;
 }
 
+interface Episode {
+  id: string;
+  episodeid: string; // This will be the SUB episode ID
+  dubEpisodeid?: string; // Add this for DUB episode ID
+  number: number;
+  title: string;
+  image: string;
+  hasDub: boolean | null;
+  hasSub: boolean | null;
+  createdAt?: string;
+}
  
 const VideoWithSubtitles = Video as any;
 
@@ -91,6 +103,7 @@ const WatchZoro = () => {
   const [anime, setAnime] = useState<Anime | null>(null);
   const [isOn, setIsOn] = useState(false);
 const [savedPosition, setSavedPosition] = useState<number | null>(null);
+const [downloadUrl, setDownloadUrl] = useState<string>("");
 
   const [selectedSubtitle, setSelectedSubtitle] = useState("disabled");
   const [subtitlesPickerVisible, setSubtitlesPickerVisible] = useState(false);
@@ -242,84 +255,48 @@ const handleDubClick = () => {
   setEpisodeLoading(true); // Set loading state to true
   setIsDubMode(true);
   };
+const cleanAnimeId = (id: string | null): string => {
+  if (!id) return '';
+  return id.replace(/-token$/, '');
+};
 
-useEffect(() => {
-  const fetchProvider = async () => {
-    try {
-      const response = await axios.get(`https://api.amvstr.me/api/v2/info/${animeId}`);
-      
-      if (response.data?.dub !== undefined) {
-        setDub(response.data.dub);
-      }
-      
-      setError(null);
-    } catch (error) {
-      console.error("Backup API also failed", error);
-      setError("Failed to fetch data from both APIs");
-    }
-  };
-  
-  if (animeId) {
-    fetchProvider();
-  }
-}, [animeId]);
+ 
  
 const fetchVideoData = async () => {
   try {
-    setIsVideoLoading(true); // Show loading state
-    setVideoError(false); // Reset error state
+    setIsVideoLoading(true);
+    setVideoError(false);
     
-    // Add the dub parameter to the URL
+    const category = isDubMode ? 'dub' : 'sub';
     const response = await axios.get(
-      `https://partyonyou.vercel.app/anime/animekai/watch/${episodeid}?dub=${isDubMode ? 'true' : 'false'}`
-    );
-    
-    console.log(
-      `https://partyonyou.vercel.app/anime/animekai/watch/${episodeid}?dub=${isDubMode ? 'true' : 'false'}`
+      `https://kenjitsu.vercel.app/api/animekai/sources/${episodeid}?category=${category}`
     );
     
     const json = response.data;
     
-    if (json.sources && json.sources.length > 0) {
-      const sourceUrl = json.sources[0].url;
+    if (json.data && json.data.sources && json.data.sources.length > 0) {
+      const sourceUrl = json.data.sources[0].url;
       setInitialVideoSource(sourceUrl);
       setVideoSource(sourceUrl);
       setSelectedQuality(sourceUrl);
     } else {
-      // No sources found - show error
       setVideoError(true);
     }
     
-    // Set subtitles from API if available and select English if available.
-    if (json.subtitles) {
-      setSubtitles(json.subtitles);
-      const englishSubtitle = (json.subtitles as Subtitle[]).find((sub: Subtitle) =>
-        sub.kind.toLowerCase().includes("en") ||
-        sub.kind.toLowerCase().includes("english")
-      );
-      if (englishSubtitle) {
-        setSelectedSubtitle(englishSubtitle.kind);
-      }
+    // Capture download URL
+    if (json.data && json.data.download) {
+      setDownloadUrl(json.data.download);
     }
     
-    // Set intro/outro segments if available.
-    if (json.intro) {
-      setIntroSegment(json.intro);
-    }
-    if (json.outro) {
-      setOutroSegment(json.outro);
-    }
+    // ... rest of your existing code for subtitles, intro, outro
   } catch (error) {
     console.error("Error fetching video data: ", error);
-    // Set error state to true when API fails
     setVideoError(true);
   } finally {
-    setIsVideoLoading(false); // Hide loading state regardless of outcome
-    setEpisodeLoading(false); // Make sure to reset episode loading state
+    setIsVideoLoading(false);
+    setEpisodeLoading(false);
   }
 };
-
- 
 
   
    useEffect(() => {
@@ -437,27 +414,62 @@ useEffect(() => {
 }, [initialVideoSource]);
 
   
-
-    const fetchAnimeDetails = async () => {
-    try {
-      const response = await axios.get(`https://partyonyou.vercel.app/meta/anilist/info/${animeId}?provider=animekai`);
-      const modifiedAnime = {
-        ...response.data,
-        posterImage: response.data.posterImage?.replace("/medium/", "/large/"),
-      };
-      setAnime(modifiedAnime);
-      setAnimeId(modifiedAnime.id);
-      if (modifiedAnime.episodes) {
-        const mappedEpisodes = modifiedAnime.episodes.map((episode: any) => ({
-          ...episode,
-          episodeid: episode.id,
-        }));
-        setEpisodes(mappedEpisodes);
-      }
-    } catch (err) {
-      console.error("Error fetching anime details:", err);
-     }
-  };
+const fetchAnimeDetails = async () => {
+  try {
+    const cleanedId = cleanAnimeId(animeId);
+    const response = await axios.get(`https://kenjitsu.vercel.app/api/animekai/anime/${cleanedId}`);
+    console.log(`https://kenjitsu.vercel.app/api/animekai/anime/${cleanedId}`);
+    
+    // The new API structure has data nested inside
+    const apiData = response.data.data;
+    
+    const modifiedAnime: Anime = {
+  id: apiData.id,
+  title: {
+    romaji: apiData.romaji || apiData.name,
+    english: apiData.name,
+    native: apiData.japanese,
+   },
+  posterImage: apiData.posterImage,
+  image: apiData.posterImage, // Add this
+  coverImage: apiData.coverImage || apiData.posterImage, // Add this
+  type: apiData.type,
+  status: apiData.status,
+  season: apiData.season || null, // Add this
+  genres: apiData.genres,
+  description: apiData.synopsis,
+  rating: apiData.score,
+  releaseDate: apiData.releaseDate,
+  studios: apiData.studios,
+  totalEpisodes: apiData.totalEpisodes,
+  dub: apiData.dub || false, // Add this
+  episodesInfo: apiData.episodes,
+  // Add any other missing properties from the Anime type
+};
+    
+    setAnime(modifiedAnime);
+    setAnimeId(apiData.id);
+    
+    // Set dub availability based on API response
+    setDub(apiData.dub || false);
+    
+    // Map provider episodes to the format your app expects
+    if (response.data.providerEpisodes) {
+      const mappedEpisodes = response.data.providerEpisodes.map((episode: any) => ({
+        id: episode.episodeId,
+        episodeid: episode.episodeId,
+        number: episode.episodeNumber,
+        title: episode.title,
+        image: apiData.posterImage, // Use anime poster as episode thumbnail
+        hasDub: episode.hasDub,
+        hasSub: episode.hasSub
+      }));
+      setEpisodes(mappedEpisodes);
+    }
+  } catch (err) {
+    console.error("Error fetching anime details:", err);
+  }
+};
 
     useEffect(() => {
        if (animeId) {
@@ -632,12 +644,17 @@ const handleNextEpisode = () => {
 
  
 
-   const filteredEpisodes = episodes
-    .filter((episode) => {
-      if (!searchQuery) return true;
-      return episode.number.toString().includes(searchQuery);
-    })
-    .sort((a, b) => Number(a.number) - Number(b.number));
+ const filteredEpisodes = episodes
+  .filter((episode) => {
+    // Filter by sub/dub availability
+    if (isDubMode && !episode.hasDub) return false;
+    if (!isDubMode && !episode.hasSub) return false;
+    
+    // Filter by search query
+    if (!searchQuery) return true;
+    return episode.number.toString().includes(searchQuery);
+  })
+  .sort((a, b) => Number(a.number) - Number(b.number));
 
       const currentIndex = filteredEpisodes.findIndex(
     (ep) => ep.episodeid === episodeid
@@ -645,27 +662,42 @@ const handleNextEpisode = () => {
 
       const currentEpisode = episodes.find((ep) => ep.episodeid === episodeid);
 
-      const renderEpisodeItem = ({ item }: { item: Episode }) => {
-        return (
-          <TouchableOpacity
-            style={styles.episodeContainer}
-            onPress={() => {
-          setEpisodeLoading(true);
-              setEpisodeid(item.episodeid);
-              navigation.navigate("Animekai");
-            }}
-          >
-            <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
-            <View style={styles.episodeTextContainer}>
-              <Text style={styles.episodeTitle}>Episode {item.number}</Text>
-              <Text style={styles.episodeTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={styles.episodeMeta}>{item.createdAt}</Text>
+  const renderEpisodeItem = ({ item }: { item: Episode }) => {
+  return (
+    <TouchableOpacity
+      style={styles.episodeContainer}
+      onPress={() => {
+        setEpisodeLoading(true);
+        // Set the correct episode ID based on mode
+        setEpisodeid(isDubMode && item.dubEpisodeid ? item.dubEpisodeid : item.episodeid);
+        navigation.navigate("Animekai");
+      }}
+    >
+      <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
+      <View style={styles.episodeTextContainer}>
+        <Text style={styles.episodeTitle}>Episode {item.number}</Text>
+        <Text style={styles.episodeTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text style={styles.episodeMeta}>{item.createdAt}</Text>
+        
+        {/* Show badges for available versions */}
+        <View style={styles.badgeContainer}>
+          {item.hasSub && (
+            <View style={[styles.badge, styles.subbedBadge]}>
+              <Text style={styles.badgeText}>SUB</Text>
             </View>
-          </TouchableOpacity>
-        );
-      };
+          )}
+          {item.hasDub && (
+            <View style={[styles.badge, styles.dubbedBadge]}>
+              <Text style={styles.badgeText}>DUB</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+};
 
          if (episodeLoading) {
           return (
@@ -1030,41 +1062,59 @@ const handleNextEpisode = () => {
   </View>
 )}
       <View style={styles.nextEpisodesHeader}>
-            <Text style={styles.nextEpisodesText}>Episodes</Text>
-<View style={styles.badgeContainer}>
-  {/* Always show SUB button */}
-<TouchableOpacity 
-        style={[
-          styles.badge, 
-          styles.subbedBadge,
-          !isDubMode && styles.activeBadge  // Apply active style when NOT in dub mode
-        ]}
-        onPress={handleSubClick}
-      >          <Text style={styles.badgeText}>SUB</Text>
-  </TouchableOpacity>
+  <View style={styles.episodesHeaderLeft}>
+    <Text style={styles.nextEpisodesText}>Episodes</Text>
+    {downloadUrl && (
+      <TouchableOpacity 
+        style={styles.downloadButton}
+        onPress={() => {
+          // Open download URL in browser
+          if (downloadUrl) {
+            // You'll need to import Linking from react-native
+            Linking.openURL(downloadUrl);
+          }
+        }}
+      >
+        <Ionicons name="download-outline" size={20} color="#E50914" />
+      </TouchableOpacity>
+    )}
+  </View>
   
-  {/* Show DUB button only when dub is true */}
-  {dub === true && (
- <TouchableOpacity 
+  <View style={styles.badgeContainer}>
+    <TouchableOpacity 
+      style={[
+        styles.badge, 
+        styles.subbedBadge,
+        !isDubMode && styles.activeBadge
+      ]}
+      onPress={handleSubClick}
+    >
+      <Text style={styles.badgeText}>SUB</Text>
+    </TouchableOpacity>
+    
+    {episodes.some(ep => ep.hasDub === true) && (
+      <TouchableOpacity 
         style={[
           styles.badge, 
           styles.dubbedBadge,
-          isDubMode && styles.activeBadge  // Apply active style when IN dub mode
+          isDubMode && styles.activeBadge
         ]}
         onPress={handleDubClick}
-      >      <Text style={styles.badgeText}>DUB</Text>
-    </TouchableOpacity>
-  )}
+      >
+        <Text style={styles.badgeText}>DUB</Text>
+      </TouchableOpacity>
+    )}
+  </View>
+  
+  <TextInput
+    style={styles.searchInput}
+    placeholder="Search by number"
+    placeholderTextColor="#888"
+    value={searchQuery}
+    onChangeText={setSearchQuery}
+    keyboardType="numeric"
+  />
 </View>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search by number"
-              placeholderTextColor="#888"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              keyboardType="numeric"
-            />
-          </View>
           <FlatList
             data={filteredEpisodes}
             renderItem={renderEpisodeItem}
@@ -1428,7 +1478,19 @@ skipButtonText: {
   selectedQualityText: {
     color: '#E50914', // or whatever style you want for the text of selected items
     fontWeight: 'bold',
-  }
+  },
+  episodesHeaderLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 10,
+},
+downloadButton: {
+  padding: 6,
+  borderRadius: 4,
+  backgroundColor: 'rgba(229, 9, 20, 0.1)',
+  borderWidth: 1,
+  borderColor: '#E50914',
+},
 });
 
 export default WatchZoro;
