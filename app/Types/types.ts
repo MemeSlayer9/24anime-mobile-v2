@@ -76,6 +76,8 @@ interface RecommendationItem {
     large: string;
     medium?: string;
   };
+  status?: string;
+  type?: string;
   image?: string;
 }
 
@@ -93,6 +95,7 @@ interface RelationItem {
     large: string;
     medium?: string;
   };
+  relationType?: string;
   image?: string;
   format?: string;
   type?: string;

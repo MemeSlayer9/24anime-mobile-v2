@@ -40,10 +40,23 @@ interface WebViewCommand {
   savedTime?: number;
 }
 
+interface Server {
+  serverId: string;
+  serverName: string;
+  mediaId: string;
+}
+
+interface ServersData {
+  sub: Server[];
+  dub: Server[];
+  raw: Server[];
+}
+
 type VideoPlayerRouteProp = RouteProp<RootStackParamList, "Animepahe">;
 
 export default function ImprovedHLSWebViewPlayer() {
   const webViewRef = useRef<WebView>(null);
+  const iframeWebViewRef = useRef<WebView>(null);
   const { episodeid, animeId, setAnimeId, setEpisodeid } = useAnimeId();
   const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -77,6 +90,12 @@ export default function ImprovedHLSWebViewPlayer() {
   const [filteredEpisodes, setFilteredEpisodes] = useState<Episode[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  // New state for servers
+  const [servers, setServers] = useState<ServersData>({sub: [], dub: [], raw: []});
+  const [selectedServer, setSelectedServer] = useState<string | null>(null);
+  const [showServers, setShowServers] = useState(false);
+  const [useIframe, setUseIframe] = useState(true);
+
   const resetControlsTimer = () => {
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
@@ -103,6 +122,7 @@ export default function ImprovedHLSWebViewPlayer() {
     try {
       setIsReady(false);
       setEpisodeLoading(true);
+      setVideoSource(""); // Clear current video source
       
       const response = await axios.get(
         `https://kenjitsu.vercel.app/api/animepahe/sources/${episodeid}?version=${version}`,
@@ -176,6 +196,31 @@ export default function ImprovedHLSWebViewPlayer() {
     }
   };
 
+  const fetchServers = async () => {
+    try {
+      const response = await axios.get(
+        `https://kenjitsu.vercel.app/api/animepahe/episode/${episodeid}/servers`,
+        { timeout: 10000 }
+      );
+      
+      if (response.data?.data) {
+        setServers(response.data.data);
+        console.log('Fetched servers:', response.data.data);
+        
+        // Automatically select first available server based on selected version
+        const versionServers = selectedVersion === 'sub' ? response.data.data.sub : response.data.data.dub;
+        if (versionServers && versionServers.length > 0) {
+          const firstServer = versionServers[0].serverId;
+          setSelectedServer(firstServer);
+          setUseIframe(true);
+          console.log('Auto-selected server:', firstServer);
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching servers:", error);
+    }
+  };
+
   const checkAvailableVersions = async () => {
     const versions: ('sub' | 'dub')[] = [];
     
@@ -211,13 +256,31 @@ export default function ImprovedHLSWebViewPlayer() {
 
   const handleVersionToggle = (version: 'sub' | 'dub') => {
     if (availableVersions.includes(version)) {
-      fetchVideoData(version);
+      setSelectedVersion(version);
+      
+      // Auto-select first server of the new version
+      const versionServers = version === 'sub' ? servers.sub : servers.dub;
+      if (versionServers && versionServers.length > 0) {
+        setSelectedServer(versionServers[0].serverId);
+        setUseIframe(true);
+      } else {
+        // If no servers available, fall back to HLS
+        setUseIframe(false);
+        setSelectedServer(null);
+        fetchVideoData(version);
+      }
     } else {
       Alert.alert(
         "Not Available",
         `${version.toUpperCase()} version is not available for this episode.`
       );
     }
+  };
+
+  const handleServerSelect = (serverId: string) => {
+    setSelectedServer(serverId);
+    setUseIframe(true);
+    setShowServers(false);
   };
 
   const fetchAnimeDetails = async () => {
@@ -257,8 +320,19 @@ export default function ImprovedHLSWebViewPlayer() {
   
   useEffect(() => {
     if (episodeid) {
+      // Reset states when episode changes
+      setIsReady(false);
+      setCurrentTime(0);
+      setDuration(0);
+      setIsPlaying(true);
+      setVideoSource("");
+      setSelectedServer(null);
+      setUseIframe(true); // Keep iframe mode on by default
+      
+      // Fetch new episode data
       checkAvailableVersions();
       fetchVideoData();
+      fetchServers();
     }
   }, [episodeid]);
 
@@ -267,6 +341,17 @@ export default function ImprovedHLSWebViewPlayer() {
       fetchAnimeDetails();
     }
   }, [animeId]);
+
+  // Re-inject JavaScript when server changes
+  useEffect(() => {
+    if (selectedServer && useIframe && iframeWebViewRef.current) {
+      const timer = setTimeout(() => {
+        iframeWebViewRef.current?.injectJavaScript(iframeInjectedJavaScript);
+      }, 2000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [selectedServer, useIframe]);
   
   const webViewHtml = `
     <!DOCTYPE html>
@@ -636,6 +721,127 @@ export default function ImprovedHLSWebViewPlayer() {
     </html>
   `;
 
+  const iframeInjectedJavaScript = `
+    (function() {
+      // Prevent any default touch behavior interference
+      document.addEventListener('touchstart', function(e) {
+        e.stopPropagation();
+      }, { passive: false, capture: true });
+      
+      document.addEventListener('touchend', function(e) {
+        e.stopPropagation();
+      }, { passive: false, capture: true });
+      
+      // Make all elements interactive and pressable
+      const style = document.createElement('style');
+      style.innerHTML = \`
+        * {
+          -webkit-touch-callout: default !important;
+          -webkit-user-select: auto !important;
+          pointer-events: auto !important;
+          touch-action: auto !important;
+          -webkit-tap-highlight-color: rgba(0,0,0,0.1) !important;
+        }
+        button, a, input, video, [role="button"], [onclick], .player-controls, .vjs-control, [class*="play"], [class*="button"], [class*="control"] {
+          pointer-events: auto !important;
+          cursor: pointer !important;
+          touch-action: auto !important;
+        }
+        body {
+          -webkit-user-select: none !important;
+          user-select: none !important;
+        }
+      \`;
+      document.head.appendChild(style);
+      
+      // Force enable all interactive elements repeatedly
+      function enableInteractiveElements() {
+        const selectors = [
+          'button', 'a', 'input', 'video', 
+          '[role="button"]', '[onclick]', 
+          '.player-controls', '.player-controls *',
+          '.vjs-control', '.vjs-control *',
+          '[class*="play"]', '[class*="Play"]',
+          '[class*="button"]', '[class*="Button"]',
+          '[class*="control"]', '[class*="Control"]',
+          '[aria-label*="play"]', '[aria-label*="Play"]',
+          '[aria-label*="pause"]', '[aria-label*="Pause"]'
+        ];
+        
+        const buttons = document.querySelectorAll(selectors.join(', '));
+        buttons.forEach(btn => {
+          btn.style.pointerEvents = 'auto';
+          btn.style.touchAction = 'auto';
+          btn.style.webkitUserSelect = 'auto';
+          btn.style.userSelect = 'auto';
+          
+          // Ensure element is clickable
+          if (!btn.onclick && !btn.hasAttribute('data-click-enabled')) {
+            btn.setAttribute('data-click-enabled', 'true');
+            const originalClick = btn.click;
+            btn.click = function() {
+              originalClick.call(this);
+            };
+          }
+        });
+      }
+      
+      // Run multiple times to ensure it catches dynamically loaded content
+      enableInteractiveElements();
+      setTimeout(enableInteractiveElements, 500);
+      setTimeout(enableInteractiveElements, 1000);
+      setTimeout(enableInteractiveElements, 2000);
+      setTimeout(enableInteractiveElements, 3000);
+      setTimeout(enableInteractiveElements, 5000);
+      
+      // Watch for DOM changes and re-enable
+      const observer = new MutationObserver(function(mutations) {
+        enableInteractiveElements();
+      });
+      
+      observer.observe(document.body, { 
+        childList: true, 
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'disabled']
+      });
+      
+      // Listen for fullscreen changes
+      document.addEventListener('fullscreenchange', function() {
+        if (document.fullscreenElement) {
+          window.ReactNativeWebView.postMessage('enterFullscreen');
+        } else {
+          window.ReactNativeWebView.postMessage('exitFullscreen');
+        }
+      });
+      
+      document.addEventListener('webkitfullscreenchange', function() {
+        if (document.webkitFullscreenElement) {
+          window.ReactNativeWebView.postMessage('enterFullscreen');
+        } else {
+          window.ReactNativeWebView.postMessage('exitFullscreen');
+        }
+      });
+      
+      document.addEventListener('mozfullscreenchange', function() {
+        if (document.mozFullScreenElement) {
+          window.ReactNativeWebView.postMessage('enterFullscreen');
+        } else {
+          window.ReactNativeWebView.postMessage('exitFullscreen');
+        }
+      });
+      
+      document.addEventListener('msfullscreenchange', function() {
+        if (document.msFullscreenElement) {
+          window.ReactNativeWebView.postMessage('enterFullscreen');
+        } else {
+          window.ReactNativeWebView.postMessage('exitFullscreen');
+        }
+      });
+    })();
+    true;
+  `;
+
   useEffect(() => {
     if (episodes.length > 0 && episodeid) {
       const episode = episodes.find(ep => ep.episodeid === episodeid);
@@ -691,7 +897,6 @@ export default function ImprovedHLSWebViewPlayer() {
       bufferingTimerRef.current = setTimeout(() => {
         if (isBuffering && webViewRef.current) {
           console.log("Buffering persisted too long, attempting recovery...");
-          // Save current time before reloading
           const savedTime = currentTime;
           sendToWebView({ type: 'reload', savedTime });
           setIsBuffering(false);
@@ -705,6 +910,22 @@ export default function ImprovedHLSWebViewPlayer() {
       }
     };
   }, [isBuffering, currentTime]);
+  
+  useEffect(() => {
+    const setOrientation = async () => {
+      try {
+        if (isFullscreen) {
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        } else {
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+        }
+      } catch (error) {
+        console.error("Failed to set orientation:", error);
+      }
+    };
+    
+    setOrientation();
+  }, [isFullscreen]);
   
   useEffect(() => {
     return () => {
@@ -723,23 +944,24 @@ export default function ImprovedHLSWebViewPlayer() {
 
   const handleToggleFullScreen = async () => {
     try {
-      if (isFullscreen) {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-        await NavigationBar.setVisibilityAsync("visible");
-        setControlsVisible(true);
-        StatusBar.setHidden(false);
-        navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
-      } else {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      const newFullscreenState = !isFullscreen;
+      
+      if (newFullscreenState) {
+        // Entering fullscreen
         await NavigationBar.setVisibilityAsync("hidden");
-        setControlsVisible(true);
         StatusBar.setHidden(true);
         navigation.getParent()?.setOptions({ tabBarStyle: { display: "none" } });
+      } else {
+        // Exiting fullscreen
+        await NavigationBar.setVisibilityAsync("visible");
+        StatusBar.setHidden(false);
+        navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
       }
       
-      setIsFullscreen(!isFullscreen);
+      setIsFullscreen(newFullscreenState);
+      setControlsVisible(true);
     } catch (error) {
-      console.error("Failed to change orientation:", error);
+      console.error("Failed to change fullscreen:", error);
     }
   };
 
@@ -789,7 +1011,7 @@ export default function ImprovedHLSWebViewPlayer() {
 
   const returnToPortraitMode = async () => {
     if (isFullscreen) {
-      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       await NavigationBar.setVisibilityAsync("visible");
       navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
       StatusBar.setHidden(false);
@@ -802,6 +1024,8 @@ export default function ImprovedHLSWebViewPlayer() {
     setSelectedQuality(source.quality);
     setPickerVisible(false);
     setIsReady(false);
+    setUseIframe(false);
+    setSelectedServer(null);
   };
   
   const retryPlayback = () => {
@@ -855,6 +1079,26 @@ export default function ImprovedHLSWebViewPlayer() {
     }
   };
 
+  const handleIframeMessage = async (event: { nativeEvent: { data: string } }) => {
+    const message = event.nativeEvent.data;
+    
+    if (message === 'enterFullscreen') {
+      // Lock to landscape when entering fullscreen in iframe
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      await NavigationBar.setVisibilityAsync("hidden");
+      StatusBar.setHidden(true);
+      navigation.getParent()?.setOptions({ tabBarStyle: { display: "none" } });
+      setIsFullscreen(true);
+    } else if (message === 'exitFullscreen') {
+      // Return to portrait when exiting fullscreen in iframe
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+      await NavigationBar.setVisibilityAsync("visible");
+      StatusBar.setHidden(false);
+      navigation.getParent()?.setOptions({ tabBarStyle: { display: "flex" } });
+      setIsFullscreen(false);
+    }
+  };
+
   const renderEpisodeItem = ({ item }: { item: Episode }) => {
     const isCurrentEpisode = item.episodeid === episodeid;
     
@@ -887,36 +1131,87 @@ export default function ImprovedHLSWebViewPlayer() {
   return (
     <View style={styles.container}>
       <Pressable 
-        onPress={() => setShowControls(!showControls)}
+        onPress={() => {
+          if (!useIframe) {
+            setShowControls(!showControls);
+          }
+        }}
         style={isFullscreen ? styles.fullscreenContainer : styles.videoContainer}
       >
+        {useIframe && selectedServer ? (
         <WebView
-          ref={webViewRef}
-          source={{ html: webViewHtml }}
-          style={styles.webview}
-          javaScriptEnabled={true}
-          domStorageEnabled={true}
-          allowsInlineMediaPlayback={true}
-          mediaPlaybackRequiresUserAction={false}
-          allowsFullscreenVideo={true}
-          onMessage={handleWebViewMessage}
-          originWhitelist={['*']}
-          scrollEnabled={false}
-          startInLoadingState={true}
-          renderLoading={() => (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="red" />
-            </View>
-          )}
-        />
+  ref={iframeWebViewRef}
+  key={`iframe-${episodeid}-${selectedServer}`}
+  source={{ uri: selectedServer }}
+  style={styles.webview}
+  javaScriptEnabled={true}
+  domStorageEnabled={true}
+  allowsInlineMediaPlayback={true}
+  mediaPlaybackRequiresUserAction={false}
+  allowsFullscreenVideo={true}
+  originWhitelist={['*']}
+  scrollEnabled={false}
+  startInLoadingState={true}
+  injectedJavaScript={iframeInjectedJavaScript}
+  injectedJavaScriptBeforeContentLoaded={`
+    window.isReactNativeWebView = true;
+    true;
+  `}
+  onMessage={handleIframeMessage}
+  onLoadEnd={() => {
+    setTimeout(() => {
+      iframeWebViewRef.current?.injectJavaScript(iframeInjectedJavaScript);
+    }, 1000);
+  }}
+  bounces={false}
+  overScrollMode="never"
+  androidLayerType="hardware"
+  // Remove this line: androidHardwareAccelerationDisabled={false}
+  mixedContentMode="always"
+  nestedScrollEnabled={true}
+  showsHorizontalScrollIndicator={false}
+  showsVerticalScrollIndicator={false}
+  onShouldStartLoadWithRequest={(request) => {
+    console.log('WebView loading:', request.url);
+    return true;
+  }}
+  renderLoading={() => (
+    <View style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color="red" />
+      <Text style={styles.loadingText}>Loading player...</Text>
+    </View>
+  )}
+/>
+        ) : (
+          <WebView
+            key={`hls-${episodeid}-${videoSource}`}
+            ref={webViewRef}
+            source={{ html: webViewHtml }}
+            style={styles.webview}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+            allowsFullscreenVideo={true}
+            onMessage={handleWebViewMessage}
+            originWhitelist={['*']}
+            scrollEnabled={false}
+            startInLoadingState={true}
+            renderLoading={() => (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="red" />
+              </View>
+            )}
+          />
+        )}
         
-        {isBuffering && (
+        {isBuffering && !useIframe && (
           <View style={styles.bufferingContainer}>
             <ActivityIndicator size="large" color="red" />
           </View>
         )}
         
-        {showControls && (
+        {showControls && !useIframe && (
           <View style={styles.customControls}>
             <View style={styles.topControls}>
               <TouchableOpacity onPress={async () => {
@@ -930,9 +1225,14 @@ export default function ImprovedHLSWebViewPlayer() {
                 Episode {currentEpisode?.number}
               </Text>
               
-            
-              
               <View style={styles.rightControls}>
+                <TouchableOpacity 
+                  style={styles.qualityButton}
+                  onPress={() => setShowServers(!showServers)}
+                >
+                  <Ionicons name="server-outline" size={24} color="white" />
+                </TouchableOpacity>
+                
                 <TouchableOpacity 
                   style={styles.qualityButton}
                   onPress={() => setPickerVisible(!pickerVisible)}
@@ -990,15 +1290,128 @@ export default function ImprovedHLSWebViewPlayer() {
           </View>
         )}
         
-        <TouchableOpacity 
-          style={styles.touchOverlay}
-          activeOpacity={1}
-          onPress={() => {
-            setShowControls(!showControls);
-            setPickerVisible(false);
-          }}
-        />
+        {showControls && useIframe && (
+          <View style={styles.customControls}>
+            <View style={styles.topControls}>
+              <TouchableOpacity onPress={async () => {
+                await returnToPortraitMode();
+                navigation.goBack();
+              }}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+              </TouchableOpacity>
+              
+              <Text style={styles.episodeNumberText}>
+                Episode {currentEpisode?.number}
+              </Text>
+              
+              <View style={styles.rightControls}>
+                <TouchableOpacity 
+                  style={styles.qualityButton}
+                  onPress={() => setShowServers(!showServers)}
+                >
+                  <Ionicons name="server-outline" size={24} color="white" />
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.qualityButton}
+                  onPress={() => setPickerVisible(!pickerVisible)}
+                >
+                  <Ionicons name="settings" size={24} color="white" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+        
+        {!useIframe && (
+          <TouchableOpacity 
+            style={styles.touchOverlay}
+            activeOpacity={1}
+            onPress={() => {
+              setShowControls(!showControls);
+              setPickerVisible(false);
+              setShowServers(false);
+            }}
+          />
+        )}
       </Pressable>
+
+      <Modal visible={showServers} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={[
+            styles.modalContent, 
+            isFullscreen && styles.modalContentFullscreen
+          ]}>
+            <Text style={styles.modalTitle}>Select Server</Text>
+            
+            {useIframe && (
+              <TouchableOpacity
+                style={styles.backToHLSButton}
+                onPress={() => {
+                  setUseIframe(false);
+                  setSelectedServer(null);
+                  setShowServers(false);
+                  fetchVideoData(selectedVersion);
+                }}
+              >
+                <Text style={styles.backToHLSText}>← Back to HLS Player</Text>
+              </TouchableOpacity>
+            )}
+            
+            <ScrollView style={styles.qualityScrollView}>
+              {selectedVersion === 'sub' && servers.sub.length > 0 && (
+                <>
+                  <Text style={styles.serverTypeTitle}>SUB Servers</Text>
+                  {servers.sub.map((server, index) => (
+                    <TouchableOpacity
+                      key={`sub-${index}`}
+                      style={[
+                        styles.qualityItem,
+                        selectedServer === server.serverId && styles.selectedQuality
+                      ]}
+                      onPress={() => handleServerSelect(server.serverId)}
+                    >
+                      <Text style={styles.qualityText}>{server.serverName}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
+              
+              {selectedVersion === 'dub' && servers.dub.length > 0 && (
+                <>
+                  <Text style={styles.serverTypeTitle}>DUB Servers</Text>
+                  {servers.dub.map((server, index) => (
+                    <TouchableOpacity
+                      key={`dub-${index}`}
+                      style={[
+                        styles.qualityItem,
+                        selectedServer === server.serverId && styles.selectedQuality
+                      ]}
+                      onPress={() => handleServerSelect(server.serverId)}
+                    >
+                      <Text style={styles.qualityText}>{server.serverName}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
+              
+              {((selectedVersion === 'sub' && servers.sub.length === 0) || 
+                (selectedVersion === 'dub' && servers.dub.length === 0)) && (
+                <Text style={styles.noServersText}>
+                  No servers available for {selectedVersion.toUpperCase()}
+                </Text>
+              )}
+            </ScrollView>
+            
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={() => setShowServers(false)}
+            >
+              <Text style={styles.closeText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={pickerVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
@@ -1309,6 +1722,34 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
   },
+  serverTypeTitle: {
+    color: '#e50914',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 8,
+    paddingLeft: 4,
+  },
+  backToHLSButton: {
+    backgroundColor: '#2a2a2a',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e50914',
+  },
+  backToHLSText: {
+    color: '#e50914',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  noServersText: {
+    color: '#888',
+    fontSize: 14,
+    textAlign: 'center',
+    padding: 20,
+  },
   infoContainer: {
     marginTop: 16,
     padding: 16,
@@ -1429,6 +1870,11 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 6,
+  },
+  loadingText: {
+    color: '#fff',
+    marginTop: 10,
+    fontSize: 14,
   },
   episodeNumberText: {
     color: "#fff",

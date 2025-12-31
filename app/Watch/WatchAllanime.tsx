@@ -256,7 +256,7 @@ const fetchDownloadLinks = async () => {
   setIsLoading(true);
   setError(null);
    try {
-    const response = await axios.get(`https://kenjitsu.vercel.app/api/anilist/sources/${episodeid}`);
+    const response = await axios.get(`https://kenjitsu.vercel.app/api/allanime/sources/${episodeid}`);
     const json = response.data;
     
     const options: DownloadOption[] = [];
@@ -808,7 +808,7 @@ const handleNextEpisode = () => {
            <VideoWithSubtitles
            ref={videoRef}
          source={{ 
-       uri: videoSource,
+       uri: 'https://myanime.sharepoint.com/sites/chartlousty/_layouts/15/download.aspx?share=IQB_-1HFrm0KQa8GtyC8cM0aAU-0yuuvqYMBjMakPhs3Zhw',
        headers: {
    "Referer": "https://kwik.cx/"
          },

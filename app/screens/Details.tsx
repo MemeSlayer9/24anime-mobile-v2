@@ -9,7 +9,9 @@ import {
   TouchableOpacity,
   TextInput,
   Animated,
+  Linking,
 } from "react-native";
+import * as FileSystem from 'expo-file-system';
 import { RouteProp, useRoute, useNavigation } from "@react-navigation/native";
 import { StackNavigationProp } from "@react-navigation/stack";
 import { LinearGradient } from "expo-linear-gradient";
@@ -112,6 +114,7 @@ const Details = () => {
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [animekaiEpisodes, setAnimekaiEpisodes] = useState<AnimekaiEpisode[]>([]);
   const [unifiedProviderData, setUnifiedProviderData] = useState<UnifiedProviderResponse | null>(null);
+const [allanimeSourceUrl, setAllanimeSourceUrl] = useState<string>("");
 
   const [anime, setAnime] = useState<Anime | null>(null);
   const [anime2, setAnime2] = useState<Anime2 | null>(null);
@@ -198,13 +201,29 @@ const Details = () => {
     }
   };
 
-  const formatAnimekaiId = (url: string): string => {
-    if (!url) return '';
-    const parts = url.split('/watch/');
-    const slug = parts[1] || url;
-    return `${slug}-token`;
-  };
-
+const fetchAllanimeSource = async (episodeId: string) => {
+  try {
+    console.log(`Fetching AllAnime source for episode: ${episodeId}`);
+    const response = await axios.get(
+      `https://kenjitsu.vercel.app/api/allanime/sources/${episodeId}`
+    );
+    
+    console.log('AllAnime Source Response:', response.data);
+    
+    const sourceUrl = response.data?.data?.sources?.[0]?.url;
+    
+    if (sourceUrl) {
+      setAllanimeSourceUrl(sourceUrl);
+      console.log('AllAnime source URL:', sourceUrl);
+    } else {
+      console.log('No source URL found in response');
+      setAllanimeSourceUrl("");
+    }
+  } catch (error) {
+    console.error("Error fetching AllAnime source:", error);
+    setAllanimeSourceUrl("");
+  }
+};
   const fetchAnimekaiEpisodes = async () => {
     try {
       console.log(`Fetching Animekai data for Anilist ID: ${id}`);
@@ -564,33 +583,7 @@ const Details = () => {
         .sort((a, b) => Number(a.episodeNumber) - Number(b.episodeNumber))
     : [];
 
-  const renderEpisodeItem = ({ item }: { item: Episode }) => {
-    return (
-      <TouchableOpacity
-        style={styles.episodeContainer}
-        onPress={() => {
-          setEpisodeid(item.episodeid);
-          if (provider === "zoro") {
-            navigation.navigate("Zoro");
-          } else if (provider === "animepahe") {
-            navigation.navigate("Animepahe");
-          } else if (provider === "animekai") {
-            navigation.navigate("Animekai");
-          }
-          setAnimeId(id);
-        }}
-      >
-        <Image source={{ uri: item.image }} style={styles.episodeThumbnail} />
-        <View style={styles.episodeTextContainer}>
-          <Text style={styles.episodeTitle}>Episode {item.number}</Text>
-          <Text style={styles.episodeTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.episodeMeta}>{item.createdAt}</Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
+ 
 
   const renderBackupEpisodeItem = ({ item }: { item: any }) => {
     return (
@@ -651,41 +644,72 @@ const Details = () => {
     );
   };
 
-  const renderUnifiedEpisodeItem = ({ item }: { item: UnifiedProviderEpisode }) => {
-    const navigationMap = {
-      'allanime': 'Allanime',
-      'anizone': 'Anizone',
-      'animepahe': 'Animepahe'
-    };
-
-    return (
-      <TouchableOpacity
-        style={styles.episodeContainer}
-        onPress={() => {
-          setEpisodeid(item.episodeId);
-          setAnimeId(id);
-          navigation.navigate(navigationMap[provider as keyof typeof navigationMap] as any);
-          console.log(`${provider} Episode ID:`, item.episodeId);
-        }}
-      >
-        <Image
-          source={{
-            uri: item.thumbnail || unifiedProviderData?.data?.image || anime?.image || "https://via.placeholder.com/150",
-          }}
-          style={styles.episodeThumbnail}
-        />
-        <View style={styles.episodeTextContainer}>
-          <Text style={styles.episodeTitle}>Episode {item.episodeNumber}</Text>
-          <Text style={styles.episodeTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          {item.rating && (
-            <Text style={styles.episodeMeta}>Rating: {item.rating}</Text>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
+  
+const renderUnifiedEpisodeItem = ({ item }: { item: UnifiedProviderEpisode }) => {
+  const navigationMap = {
+    'anizone': 'Anizone',
+    'animepahe': 'Animepahe'
   };
+
+  const handleEpisodePress = async () => {
+    if (provider === 'allanime') {
+      // For AllAnime, fetch and open the source directly
+      try {
+        console.log(`Fetching AllAnime source for episode: ${item.episodeId}`);
+        const response = await axios.get(
+          `https://kenjitsu.vercel.app/api/allanime/sources/${item.episodeId}`
+        );
+        
+        console.log('AllAnime Source Response:', response.data);
+        
+        const sourceUrl = response.data?.data?.sources?.[0]?.url;
+        
+        if (sourceUrl) {
+          console.log('Opening AllAnime source URL:', sourceUrl);
+          await Linking.openURL(sourceUrl);
+        } else {
+          console.log('No source URL found in response');
+        }
+      } catch (error) {
+        console.error("Error fetching/opening AllAnime source:", error);
+      }
+    } else {
+      setEpisodeid(item.episodeId);
+      setAnimeId(id);
+      navigation.navigate(navigationMap[provider as keyof typeof navigationMap] as any);
+      console.log(`${provider} Episode ID:`, item.episodeId);
+    }
+  };
+
+  return (
+    <TouchableOpacity
+      style={styles.episodeContainer}
+      onPress={handleEpisodePress}
+    >
+      <Image
+        source={{
+          uri: item.thumbnail || unifiedProviderData?.data?.image || anime?.image || "https://via.placeholder.com/150",
+        }}
+        style={styles.episodeThumbnail}
+      />
+      <View style={styles.episodeTextContainer}>
+        <Text style={styles.episodeTitle}>Episode {item.episodeNumber}</Text>
+        <Text style={styles.episodeTitle} numberOfLines={1}>
+          {item.title}
+        </Text>
+        {item.rating && (
+          <Text style={styles.episodeMeta}>Rating: {item.rating}</Text>
+        )}
+      </View>
+      
+      {provider === 'allanime' && (
+        <View style={styles.allanimeIndicator}>
+          <Ionicons name="open-outline" size={20} color="#DB202C" />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+};
 
   const providerOptions = [
     { label: "Animepahe", value: "animepahe" },
@@ -777,121 +801,226 @@ const Details = () => {
             />
           </TouchableOpacity>
         )}
+<View style={styles.tabsWrapper}>
+  <ScrollView 
+    horizontal 
+    showsHorizontalScrollIndicator={false} 
+    contentContainerStyle={styles.tabsContainer}
+  >
+    {tabs.map((tab) => {
+      const isActive = activeTab === tab.key;
+      return (
+        <TouchableOpacity
+          key={tab.key}
+          onPress={() => setActiveTab(tab.key)}
+          style={[
+            styles.tabButton,
+            isActive && styles.activeTabButton
+          ]}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              isActive && styles.activeTabText
+            ]}
+          >
+            {tab.label}
+          </Text>
+          {isActive && <View style={styles.activeTabIndicator} />}
+        </TouchableOpacity>
+      );
+    })}
+  </ScrollView>
+</View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsContainer}>
-          {tabs.map((tab) => {
-            const isActive = activeTab === tab.key;
-            return (
-              <TouchableOpacity
-                key={tab.key}
-                onPress={() => setActiveTab(tab.key)}
-                style={[
-                  styles.tabButton,
-                  isActive && styles.activeTabButton
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.tabText,
-                    isActive && styles.activeTabText
-                  ]}
-                >
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
 
-        {activeTab === 'description' && (
-          <View style={styles.descriptionContainer}>
+
+     {activeTab === 'description' && (
+  <View style={styles.descriptionContainer}>
+    <View style={styles.sectionHeader}>
+      <View style={styles.headerAccent} />
+      <Text style={styles.sectionTitle}>Synopsis</Text>
+    </View>
+    <View style={styles.descriptionCard}>
+      <Text
+        style={styles.description}
+        numberOfLines={isExpanded ? undefined : 5}
+        ellipsizeMode="tail"
+      >
+        {stripHtmlTags(unifiedProviderData?.data?.synopsis) ||
+         stripHtmlTags(providerData?.data?.synopsis) || 
+         anime?.description || 
+         anime2?.description || 
+         'No description available'}
+      </Text>
+      <TouchableOpacity onPress={toggleExpanded} style={styles.readMoreButton}>
+        <Text style={styles.readMore}>
+          {isExpanded ? "Show Less ▲" : "Read More ▼"}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
+
+      {activeTab === 'recommendations' && (
+  <View style={styles.contentSection}>
+    <View style={styles.sectionHeader}>
+      <View style={styles.headerAccent} />
+      <Text style={styles.sectionTitle}>You Might Also Like</Text>
+    </View>
+    <ScrollView 
+      horizontal 
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.horizontalScrollContent}
+    >
+      {(anime?.results || anime?.recommendations)?.map((recommendation, index) => (
+        <TouchableOpacity
+          key={recommendation?.id}
+          style={[styles.mediaCard, index === 0 && styles.firstCard]}
+          onPress={() => navigation.navigate('Details', { id: recommendation?.id })}
+          activeOpacity={0.8}
+        >
+          <View style={styles.cardImageContainer}>
+            <Image
+              source={{ uri: recommendation?.coverImage?.large || recommendation?.image }}
+              style={styles.mediaImage}
+            />
+            <View style={styles.imageOverlay}>
+              <View style={styles.overlayGradientBottom} />
+            </View>
+          </View>
+          <View style={styles.cardContent}>
             <Text
-              style={styles.description}
-              numberOfLines={isExpanded ? undefined : 4}
+              style={styles.mediaTitle}
+              numberOfLines={2}
               ellipsizeMode="tail"
             >
-              {stripHtmlTags(unifiedProviderData?.data?.synopsis) ||
-               stripHtmlTags(providerData?.data?.synopsis) || 
-               anime?.description || 
-               anime2?.description || 
-               'No description available'}
+              {recommendation?.title?.romaji}
             </Text>
-            <TouchableOpacity onPress={toggleExpanded}>
-              <Text style={styles.readMore}>
-                {isExpanded ? "Read Less" : "Read More"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {activeTab === 'recommendations' && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {(anime?.results || anime?.recommendations)?.map((recommendation) => (
-              <TouchableOpacity
-                key={recommendation?.id}
-                style={styles.relation}
-                onPress={() => navigation.navigate('Details', { id: recommendation?.id })}
-              >
-                <Image
-                  source={{ uri: recommendation?.coverImage?.large || recommendation?.image }}
-                  style={styles.bitch}
-                />
-                <Text
-                  style={[styles.episodeTitle, { width: 120 }]}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                >
-                  {recommendation?.title?.romaji}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        )}
-
-        {activeTab === 'relations' && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {(anime?.relation || anime?.relations)
-              ?.filter(relation => (relation?.format === 'TV' || relation?.type === 'TV' || relation?.format === 'MOVIE' || relation?.type === 'MOVIE'))
-              ?.map((relation) => (
-                <TouchableOpacity
-                  key={relation?.id}
-                  style={styles.relation}
-                  onPress={() => navigation.navigate('Details', { id: relation?.id })}
-                >
-                  <Image
-                    source={{ uri: relation?.coverImage?.large || relation?.image }}
-                    style={styles.bitch}
-                  />
-                  <View style={styles.textContainer}>
-                    <Text style={styles.episodeTitle}>Status: {relation?.status}</Text>
-                    <Text
-                      style={[styles.episodeTitle, { width: 120 }]}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {relation?.title?.romaji}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-          </ScrollView>
-        )}
-
-        {activeTab === 'characters' && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {anime?.characters?.map((character) => (
-              <TouchableOpacity key={character?.id}>
-                <Image
-                  source={{ uri: character?.image }}
-                  style={styles.bitch}
-                />
-                <View style={styles.textContainer}>
-                  <Text style={styles.episodeTitle}>{character?.name?.full}</Text>
+            <View style={styles.mediaMetaRow}>
+              {recommendation?.type && (
+                <View style={styles.metaBadge}>
+                  <Text style={styles.metaBadgeText}>{recommendation?.type}</Text>
                 </View>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        )}
+              )}
+              {recommendation?.status && (
+                <View style={[styles.metaBadge, styles.statusBadge]}>
+                  <Text style={styles.metaBadgeText}>{recommendation?.status}</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  </View>
+)}
+    {activeTab === 'relations' && (
+  <View style={styles.contentSection}>
+    <View style={styles.sectionHeader}>
+      <View style={styles.headerAccent} />
+      <Text style={styles.sectionTitle}>Related Anime</Text>
+    </View>
+    <ScrollView 
+      horizontal 
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.horizontalScrollContent}
+    >
+      {(anime?.relation || anime?.relations)
+        ?.filter(relation => (
+          relation?.format === 'TV' || 
+          relation?.type === 'TV' || 
+          relation?.format === 'MOVIE' || 
+          relation?.type === 'MOVIE'
+        ))
+        ?.map((relation, index) => (
+          <TouchableOpacity
+            key={relation?.id}
+            style={[styles.mediaCard, index === 0 && styles.firstCard]}
+            onPress={() => navigation.navigate('Details', { id: relation?.id })}
+            activeOpacity={0.8}
+          >
+            <View style={styles.cardImageContainer}>
+              <Image
+                source={{ uri: relation?.coverImage?.large || relation?.image }}
+                style={styles.mediaImage}
+              />
+              <View style={styles.imageOverlay}>
+                <View style={styles.overlayGradientBottom} />
+              </View>
+              {relation?.relationType && (
+                <View style={styles.relationTypeBadge}>
+                  <Text style={styles.relationTypeText}>{relation?.relationType}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.cardContent}>
+              <Text
+                style={styles.mediaTitle}
+                numberOfLines={2}
+                ellipsizeMode="tail"
+              >
+                {relation?.title?.romaji}
+              </Text>
+              <View style={styles.mediaMetaRow}>
+                {relation?.type && (
+                  <View style={styles.metaBadge}>
+                    <Text style={styles.metaBadgeText}>{relation?.type}</Text>
+                  </View>
+                )}
+                {relation?.status && (
+                  <View style={[styles.metaBadge, styles.statusBadge]}>
+                    <Text style={styles.metaBadgeText}>{relation?.status}</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          </TouchableOpacity>
+        ))}
+    </ScrollView>
+  </View>
+)}
+
+      {activeTab === 'characters' && (
+  <View style={styles.contentSection}>
+    <View style={styles.sectionHeader}>
+      <View style={styles.headerAccent} />
+      <Text style={styles.sectionTitle}>Characters</Text>
+    </View>
+    <ScrollView 
+      horizontal 
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.horizontalScrollContent}
+    >
+      {anime?.characters?.map((character, index) => (
+        <TouchableOpacity 
+          key={character?.id}
+          style={[styles.characterCard, index === 0 && styles.firstCard]}
+          activeOpacity={0.8}
+        >
+          <View style={styles.characterImageContainer}>
+            <Image
+              source={{ uri: character?.image }}
+              style={styles.characterImage}
+            />
+            <View style={styles.characterOverlay}>
+              <View style={styles.characterGradient} />
+            </View>
+          </View>
+          <View style={styles.characterInfo}>
+            <Text
+              style={styles.characterName}
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {character?.name?.full}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  </View>
+)}
       </LinearGradient>
 
       <View style={styles.dropdownContainer}>
@@ -1146,6 +1275,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
   },
+   readMoreButton: {
+    marginTop: 12,
+    alignSelf: 'center',
+  },
   descriptionContainer: { 
     paddingHorizontal: 10, 
     marginVertical: 10 
@@ -1215,6 +1348,185 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
   },
+   sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  contentSection: {
+    marginVertical: 16,
+  },
+   descriptionCard: {
+    backgroundColor: 'rgba(30, 30, 30, 0.6)',
+    marginHorizontal: 16,
+    padding: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+   headerAccent: {
+    width: 4,
+    height: 24,
+    backgroundColor: '#DB202C',
+    borderRadius: 2,
+    marginRight: 12,
+  },
+    sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+   horizontalScrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+   firstCard: {
+    marginLeft: 0,
+  },
+  mediaCard: {
+    width: 160,
+    marginRight: 16,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  cardImageContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 220,
+  },
+  mediaImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  imageOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
+  },
+  metaBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  statusBadge: {
+    backgroundColor: 'rgba(76, 217, 100, 0.2)',
+  },
+  metaBadgeText: {
+    color: '#CCCCCC',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+   mediaTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    lineHeight: 20,
+    marginBottom: 8,
+    minHeight: 40,
+  },
+  mediaMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+   cardContent: {
+    padding: 12,
+  },
+  relationTypeBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(219, 32, 44, 0.9)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  relationTypeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+    overlayGradientBottom: {
+    flex: 1,
+    backgroundColor: 'transparent',
+   },
+   characterCard: {
+    width: 140,
+    marginRight: 16,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  characterImageContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 200,
+  },
+  characterImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  characterOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+  },
+  characterGradient: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  characterInfo: {
+    padding: 12,
+    minHeight: 60,
+    justifyContent: 'center',
+  },
+  characterName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+    activeTabIndicator: {
+    position: 'absolute',
+    bottom: 4,
+    left: 20,
+    right: 20,
+    height: 3,
+    backgroundColor: '#DB202C',
+    borderRadius: 2,
+  },
+    tabsWrapper: {
+     
+   },
+   allanimeIndicator: {
+  padding: 8,
+  marginLeft: 8,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
 });
 
 export default Details;
